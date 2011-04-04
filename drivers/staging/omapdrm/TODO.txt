@@ -1,0 +1,14 @@
+TODO
+. check error handling/cleanup paths
+. add drm_plane / overlay support
+. add video decode/encode support (via syslink3 + codec-engine)
+. still some rough edges with flipping.. event back to userspace should
+  really come after VSYNC interrupt
+
+Userspace:
+. git://github.com/robclark/xf86-video-omap.git
+
+Currently tested on
+. OMAP3530 beagleboard
+. OMAP4430 pandaboard
+. OMAP4460 pandaboard
