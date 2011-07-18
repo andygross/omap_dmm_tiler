@@ -77,7 +77,7 @@ int psb_gem_dumb_map_gtt(struct drm_file *file, struct drm_device *dev,
 
 	/* Make it mmapable */
 	if (!obj->map_list.map) {
-		ret = gem_create_mmap_offset(obj);
+		ret = drm_gem_create_mmap_offset(obj);
 		if (ret)
 			goto out;
 	}
