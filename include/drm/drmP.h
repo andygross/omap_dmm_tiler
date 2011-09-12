@@ -1625,6 +1625,9 @@ drm_gem_object_handle_unreference_unlocked(struct drm_gem_object *obj)
 	drm_gem_object_unreference_unlocked(obj);
 }
 
+struct page ** drm_gem_get_pages(struct drm_gem_object *obj, gfp_t gfpmask);
+void drm_gem_put_pages(struct drm_gem_object *obj, struct page **pages,
+		bool dirty, bool accessed);
 void drm_gem_free_mmap_offset(struct drm_gem_object *obj);
 int drm_gem_create_mmap_offset(struct drm_gem_object *obj);
 
