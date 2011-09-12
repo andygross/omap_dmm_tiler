@@ -1450,52 +1450,29 @@ static int
 i915_gem_object_get_pages_gtt(struct drm_i915_gem_object *obj,
 			      gfp_t gfpmask)
 {
-	int page_count, i;
-	struct address_space *mapping;
-	struct inode *inode;
-	struct page *page;
+	struct page **pages;
 
-	/* Get the list of pages out of our struct file.  They'll be pinned
-	 * at this point until we release them.
-	 */
-	page_count = obj->base.size / PAGE_SIZE;
 	BUG_ON(obj->pages != NULL);
-	obj->pages = drm_malloc_ab(page_count, sizeof(struct page *));
-	if (obj->pages == NULL)
-		return -ENOMEM;
 
-	inode = obj->base.filp->f_path.dentry->d_inode;
-	mapping = inode->i_mapping;
-	gfpmask |= mapping_gfp_mask(mapping);
+	pages = drm_gem_get_pages(&obj->base, gfpmask);
 
-	for (i = 0; i < page_count; i++) {
-		page = shmem_read_mapping_page_gfp(mapping, i, gfpmask);
-		if (IS_ERR(page))
-			goto err_pages;
-
-		obj->pages[i] = page;
+	if (IS_ERR(pages)) {
+		dev_err(obj->base.dev->dev,
+				"could not get pages: %ld\n", PTR_ERR(pages));
+		return PTR_ERR(pages);
 	}
 
 	if (obj->tiling_mode != I915_TILING_NONE)
 		i915_gem_object_do_bit_17_swizzle(obj);
 
+	obj->pages = pages;
+
 	return 0;
-
-err_pages:
-	while (i--)
-		page_cache_release(obj->pages[i]);
-
-	drm_free_large(obj->pages);
-	obj->pages = NULL;
-	return PTR_ERR(page);
 }
 
 static void
 i915_gem_object_put_pages_gtt(struct drm_i915_gem_object *obj)
 {
-	int page_count = obj->base.size / PAGE_SIZE;
-	int i;
-
 	BUG_ON(obj->madv == __I915_MADV_PURGED);
 
 	if (obj->tiling_mode != I915_TILING_NONE)
@@ -1504,18 +1481,10 @@ i915_gem_object_put_pages_gtt(struct drm_i915_gem_object *obj)
 	if (obj->madv == I915_MADV_DONTNEED)
 		obj->dirty = 0;
 
-	for (i = 0; i < page_count; i++) {
-		if (obj->dirty)
-			set_page_dirty(obj->pages[i]);
+	drm_gem_put_pages(&obj->base, obj->pages, obj->dirty,
+			obj->madv == I915_MADV_WILLNEED);
 
-		if (obj->madv == I915_MADV_WILLNEED)
-			mark_page_accessed(obj->pages[i]);
-
-		page_cache_release(obj->pages[i]);
-	}
 	obj->dirty = 0;
-
-	drm_free_large(obj->pages);
 	obj->pages = NULL;
 }
 
