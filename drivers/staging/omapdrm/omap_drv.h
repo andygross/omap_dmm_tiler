@@ -100,17 +100,8 @@ int omap_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
 		struct drm_mode_create_dumb *args);
 int omap_gem_mmap(struct file *filp, struct vm_area_struct *vma);
 int omap_gem_fault(struct vm_area_struct *vma, struct vm_fault *vmf);
-int omap_gem_op_start(struct drm_gem_object *obj, enum omap_gem_op op);
-int omap_gem_op_finish(struct drm_gem_object *obj, enum omap_gem_op op);
-int omap_gem_op_sync(struct drm_gem_object *obj, enum omap_gem_op op);
-int omap_gem_op_async(struct drm_gem_object *obj, enum omap_gem_op op,
-		void (*fxn)(void *arg), void *arg);
-int omap_gem_get_paddr(struct drm_gem_object *obj,
-		dma_addr_t *paddr, bool remap);
-int omap_gem_put_paddr(struct drm_gem_object *obj);
-int omap_gem_get_vaddr(struct drm_gem_object *obj, void **vaddr);
-int omap_gem_put_vaddr(struct drm_gem_object *obj);
-uint64_t omap_gem_mmap_offset(struct drm_gem_object *obj);
+void omap_gem_vm_open(struct vm_area_struct *vma);
+void omap_gem_vm_close(struct vm_area_struct *vma);
 
 static inline int align_pitch(int pitch, int width, int bpp)
 {
