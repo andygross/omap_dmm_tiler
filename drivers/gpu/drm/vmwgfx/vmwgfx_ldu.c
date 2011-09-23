@@ -83,6 +83,15 @@ static void vmw_ldu_crtc_gamma_set(struct drm_crtc *crtc,
 				   u16 *r, u16 *g, u16 *b,
 				   uint32_t start, uint32_t size)
 {
+	struct vmw_private *dev_priv = vmw_priv(crtc->dev);
+	int i;
+
+	for (i = 0; i < size; i++) {
+		DRM_DEBUG("%d r/g/b = 0x%04x / 0x%04x / 0x%04x\n", i, r[i], g[i], b[i]);
+		vmw_write(dev_priv, SVGA_PALETTE_BASE + i * 3 + 0, r[i] >> 8);
+		vmw_write(dev_priv, SVGA_PALETTE_BASE + i * 3 + 1, g[i] >> 8);
+		vmw_write(dev_priv, SVGA_PALETTE_BASE + i * 3 + 2, b[i] >> 8);
+	}
 }
 
 static void vmw_ldu_crtc_destroy(struct drm_crtc *crtc)
@@ -114,10 +123,8 @@ static int vmw_ldu_commit_list(struct vmw_private *dev_priv)
 			return 0;
 		fb = entry->base.crtc.fb;
 
-		vmw_kms_write_svga(dev_priv, w, h, fb->pitch,
-				   fb->bits_per_pixel, fb->depth);
-
-		return 0;
+		return vmw_kms_write_svga(dev_priv, w, h, fb->pitch,
+					  fb->bits_per_pixel, fb->depth);
 	}
 
 	if (!list_empty(&lds->active)) {
@@ -265,9 +272,7 @@ static int vmw_ldu_crtc_set_config(struct drm_mode_set *set)
 
 		vmw_ldu_del_active(dev_priv, ldu);
 
-		vmw_ldu_commit_list(dev_priv);
-
-		return 0;
+		return vmw_ldu_commit_list(dev_priv);
 	}
 
 
@@ -292,9 +297,7 @@ static int vmw_ldu_crtc_set_config(struct drm_mode_set *set)
 
 	vmw_ldu_add_active(dev_priv, ldu, vfb);
 
-	vmw_ldu_commit_list(dev_priv);
-
-	return 0;
+	return vmw_ldu_commit_list(dev_priv);
 }
 
 static struct drm_crtc_funcs vmw_legacy_crtc_funcs = {
@@ -340,9 +343,16 @@ static enum drm_connector_status
 	vmw_ldu_connector_detect(struct drm_connector *connector,
 				 bool force)
 {
-	if (vmw_connector_to_ldu(connector)->pref_active)
-		return connector_status_connected;
-	return connector_status_disconnected;
+	uint32_t num_displays;
+	struct drm_device *dev = connector->dev;
+	struct vmw_private *dev_priv = vmw_priv(dev);
+
+	mutex_lock(&dev_priv->hw_mutex);
+	num_displays = vmw_read(dev_priv, SVGA_REG_NUM_DISPLAYS);
+	mutex_unlock(&dev_priv->hw_mutex);
+
+	return ((vmw_connector_to_ldu(connector)->base.unit < num_displays) ?
+		connector_status_connected : connector_status_disconnected);
 }
 
 static const struct drm_display_mode vmw_ldu_connector_builtin[] = {
@@ -539,6 +549,8 @@ static int vmw_ldu_init(struct vmw_private *dev_priv, unsigned unit)
 	encoder->possible_clones = 0;
 
 	drm_crtc_init(dev, crtc, &vmw_legacy_crtc_funcs);
+
+	drm_mode_crtc_set_gamma_size(crtc, 256);
 
 	drm_connector_attach_property(connector,
 				      dev->mode_config.dirty_info_property,

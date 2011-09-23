@@ -45,9 +45,6 @@ int vmw_getparam_ioctl(struct drm_device *dev, void *data,
 	case DRM_VMW_PARAM_3D:
 		param->value = vmw_fifo_have_3d(dev_priv) ? 1 : 0;
 		break;
-	case DRM_VMW_PARAM_FIFO_OFFSET:
-		param->value = dev_priv->mmio_start;
-		break;
 	case DRM_VMW_PARAM_HW_CAPS:
 		param->value = dev_priv->capabilities;
 		break;
@@ -57,6 +54,13 @@ int vmw_getparam_ioctl(struct drm_device *dev, void *data,
 	case DRM_VMW_PARAM_MAX_FB_SIZE:
 		param->value = dev_priv->vram_size;
 		break;
+	case DRM_VMW_PARAM_FIFO_HW_VERSION:
+	{
+		__le32 __iomem *fifo_mem = dev_priv->mmio_virt;
+
+		param->value = ioread32(fifo_mem + SVGA_FIFO_3D_HWVERSION);
+		break;
+	}
 	default:
 		DRM_ERROR("Illegal vmwgfx get param request: %d\n",
 			  param->param);
@@ -66,25 +70,43 @@ int vmw_getparam_ioctl(struct drm_device *dev, void *data,
 	return 0;
 }
 
-int vmw_fifo_debug_ioctl(struct drm_device *dev, void *data,
+
+int vmw_get_cap_3d_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file_priv)
 {
+	struct drm_vmw_get_3d_cap_arg *arg =
+		(struct drm_vmw_get_3d_cap_arg *) data;
 	struct vmw_private *dev_priv = vmw_priv(dev);
-	struct vmw_fifo_state *fifo_state = &dev_priv->fifo;
-	struct drm_vmw_fifo_debug_arg *arg =
-	    (struct drm_vmw_fifo_debug_arg *)data;
-	__le32 __user *buffer = (__le32 __user *)
-	    (unsigned long)arg->debug_buffer;
+	uint32_t size;
+	__le32 __iomem *fifo_mem;
+	void __user *buffer = (void __user *)((unsigned long)(arg->buffer));
+	void *bounce;
+	int ret;
 
-	if (unlikely(fifo_state->last_buffer == NULL))
+	if (unlikely(arg->pad64 != 0)) {
+		DRM_ERROR("Illegal GET_3D_CAP argument.\n");
 		return -EINVAL;
-
-	if (arg->debug_buffer_size < fifo_state->last_data_size) {
-		arg->used_size = arg->debug_buffer_size;
-		arg->did_not_fit = 1;
-	} else {
-		arg->used_size = fifo_state->last_data_size;
-		arg->did_not_fit = 0;
 	}
-	return copy_to_user(buffer, fifo_state->last_buffer, arg->used_size);
+
+	size = (SVGA_FIFO_3D_CAPS_LAST - SVGA_FIFO_3D_CAPS + 1) << 2;
+
+	if (arg->max_size < size)
+		size = arg->max_size;
+
+	bounce = vmalloc(size);
+	if (unlikely(bounce == NULL)) {
+		DRM_ERROR("Failed to allocate bounce buffer for 3D caps.\n");
+		return -ENOMEM;
+	}
+
+	fifo_mem = dev_priv->mmio_virt;
+	memcpy_fromio(bounce, &fifo_mem[SVGA_FIFO_3D_CAPS], size);
+
+	ret = copy_to_user(buffer, bounce, size);
+	vfree(bounce);
+
+	if (unlikely(ret != 0))
+		DRM_ERROR("Failed to report 3D caps info.\n");
+
+	return ret;
 }

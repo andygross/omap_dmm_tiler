@@ -72,21 +72,11 @@ int vmw_fifo_init(struct vmw_private *dev_priv, struct vmw_fifo_state *fifo)
 	uint32_t max;
 	uint32_t min;
 	uint32_t dummy;
-	int ret;
 
 	fifo->static_buffer_size = VMWGFX_FIFO_STATIC_SIZE;
 	fifo->static_buffer = vmalloc(fifo->static_buffer_size);
 	if (unlikely(fifo->static_buffer == NULL))
 		return -ENOMEM;
-
-	fifo->last_buffer_size = VMWGFX_FIFO_STATIC_SIZE;
-	fifo->last_data_size = 0;
-	fifo->last_buffer_add = false;
-	fifo->last_buffer = vmalloc(fifo->last_buffer_size);
-	if (unlikely(fifo->last_buffer == NULL)) {
-		ret = -ENOMEM;
-		goto out_err;
-	}
 
 	fifo->dynamic_buffer = NULL;
 	fifo->reserved_size = 0;
@@ -137,14 +127,10 @@ int vmw_fifo_init(struct vmw_private *dev_priv, struct vmw_fifo_state *fifo)
 		 (unsigned int) min,
 		 (unsigned int) fifo->capabilities);
 
-	atomic_set(&dev_priv->fence_seq, dev_priv->last_read_sequence);
-	iowrite32(dev_priv->last_read_sequence, fifo_mem + SVGA_FIFO_FENCE);
-	vmw_fence_queue_init(&fifo->fence_queue);
+	atomic_set(&dev_priv->marker_seq, dev_priv->last_read_seqno);
+	iowrite32(dev_priv->last_read_seqno, fifo_mem + SVGA_FIFO_FENCE);
+	vmw_marker_queue_init(&fifo->marker_queue);
 	return vmw_fifo_send_fence(dev_priv, &dummy);
-out_err:
-	vfree(fifo->static_buffer);
-	fifo->static_buffer = NULL;
-	return ret;
 }
 
 void vmw_fifo_ping_host(struct vmw_private *dev_priv, uint32_t reason)
@@ -170,7 +156,7 @@ void vmw_fifo_release(struct vmw_private *dev_priv, struct vmw_fifo_state *fifo)
 	while (vmw_read(dev_priv, SVGA_REG_BUSY) != 0)
 		vmw_write(dev_priv, SVGA_REG_SYNC, SVGA_SYNC_GENERIC);
 
-	dev_priv->last_read_sequence = ioread32(fifo_mem + SVGA_FIFO_FENCE);
+	dev_priv->last_read_seqno = ioread32(fifo_mem + SVGA_FIFO_FENCE);
 
 	vmw_write(dev_priv, SVGA_REG_CONFIG_DONE,
 		  dev_priv->config_done_state);
@@ -180,12 +166,7 @@ void vmw_fifo_release(struct vmw_private *dev_priv, struct vmw_fifo_state *fifo)
 		  dev_priv->traces_state);
 
 	mutex_unlock(&dev_priv->hw_mutex);
-	vmw_fence_queue_takedown(&fifo->fence_queue);
-
-	if (likely(fifo->last_buffer != NULL)) {
-		vfree(fifo->last_buffer);
-		fifo->last_buffer = NULL;
-	}
+	vmw_marker_queue_takedown(&fifo->marker_queue);
 
 	if (likely(fifo->static_buffer != NULL)) {
 		vfree(fifo->static_buffer);
@@ -466,7 +447,7 @@ void vmw_fifo_commit(struct vmw_private *dev_priv, uint32_t bytes)
 	mutex_unlock(&fifo_state->fifo_mutex);
 }
 
-int vmw_fifo_send_fence(struct vmw_private *dev_priv, uint32_t *sequence)
+int vmw_fifo_send_fence(struct vmw_private *dev_priv, uint32_t *seqno)
 {
 	struct vmw_fifo_state *fifo_state = &dev_priv->fifo;
 	struct svga_fifo_cmd_fence *cmd_fence;
@@ -476,16 +457,16 @@ int vmw_fifo_send_fence(struct vmw_private *dev_priv, uint32_t *sequence)
 
 	fm = vmw_fifo_reserve(dev_priv, bytes);
 	if (unlikely(fm == NULL)) {
-		*sequence = atomic_read(&dev_priv->fence_seq);
+		*seqno = atomic_read(&dev_priv->marker_seq);
 		ret = -ENOMEM;
-		(void)vmw_fallback_wait(dev_priv, false, true, *sequence,
+		(void)vmw_fallback_wait(dev_priv, false, true, *seqno,
 					false, 3*HZ);
 		goto out_err;
 	}
 
 	do {
-		*sequence = atomic_add_return(1, &dev_priv->fence_seq);
-	} while (*sequence == 0);
+		*seqno = atomic_add_return(1, &dev_priv->marker_seq);
+	} while (*seqno == 0);
 
 	if (!(fifo_state->capabilities & SVGA_FIFO_CAP_FENCE)) {
 
@@ -502,61 +483,11 @@ int vmw_fifo_send_fence(struct vmw_private *dev_priv, uint32_t *sequence)
 	cmd_fence = (struct svga_fifo_cmd_fence *)
 	    ((unsigned long)fm + sizeof(__le32));
 
-	iowrite32(*sequence, &cmd_fence->fence);
-	fifo_state->last_buffer_add = true;
+	iowrite32(*seqno, &cmd_fence->fence);
 	vmw_fifo_commit(dev_priv, bytes);
-	fifo_state->last_buffer_add = false;
-	(void) vmw_fence_push(&fifo_state->fence_queue, *sequence);
-	vmw_update_sequence(dev_priv, fifo_state);
+	(void) vmw_marker_push(&fifo_state->marker_queue, *seqno);
+	vmw_update_seqno(dev_priv, fifo_state);
 
 out_err:
 	return ret;
-}
-
-/**
- * Map the first page of the FIFO read-only to user-space.
- */
-
-static int vmw_fifo_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
-{
-	int ret;
-	unsigned long address = (unsigned long)vmf->virtual_address;
-
-	if (address != vma->vm_start)
-		return VM_FAULT_SIGBUS;
-
-	ret = vm_insert_pfn(vma, address, vma->vm_pgoff);
-	if (likely(ret == -EBUSY || ret == 0))
-		return VM_FAULT_NOPAGE;
-	else if (ret == -ENOMEM)
-		return VM_FAULT_OOM;
-
-	return VM_FAULT_SIGBUS;
-}
-
-static struct vm_operations_struct vmw_fifo_vm_ops = {
-	.fault = vmw_fifo_vm_fault,
-	.open = NULL,
-	.close = NULL
-};
-
-int vmw_fifo_mmap(struct file *filp, struct vm_area_struct *vma)
-{
-	struct drm_file *file_priv;
-	struct vmw_private *dev_priv;
-
-	file_priv = filp->private_data;
-	dev_priv = vmw_priv(file_priv->minor->dev);
-
-	if (vma->vm_pgoff != (dev_priv->mmio_start >> PAGE_SHIFT) ||
-	    (vma->vm_end - vma->vm_start) != PAGE_SIZE)
-		return -EINVAL;
-
-	vma->vm_flags &= ~(VM_WRITE | VM_MAYWRITE);
-	vma->vm_flags |= VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_SHARED;
-	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
-	vma->vm_page_prot = ttm_io_prot(TTM_PL_FLAG_UNCACHED,
-					vma->vm_page_prot);
-	vma->vm_ops = &vmw_fifo_vm_ops;
-	return 0;
 }

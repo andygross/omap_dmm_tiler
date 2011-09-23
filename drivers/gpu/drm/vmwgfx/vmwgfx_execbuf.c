@@ -44,10 +44,36 @@ static int vmw_cmd_ok(struct vmw_private *dev_priv,
 	return 0;
 }
 
+
+static int vmw_resource_to_validate_list(struct vmw_sw_context *sw_context,
+					 struct vmw_resource **p_res)
+{
+	int ret = 0;
+	struct vmw_resource *res = *p_res;
+
+	if (!res->on_validate_list) {
+		if (sw_context->num_ref_resources >= VMWGFX_MAX_VALIDATIONS) {
+			DRM_ERROR("Too many resources referenced in "
+				  "command stream.\n");
+			ret = -ENOMEM;
+			goto out;
+		}
+		sw_context->resources[sw_context->num_ref_resources++] = res;
+		res->on_validate_list = true;
+		return 0;
+	}
+
+out:
+	vmw_resource_unreference(p_res);
+	return ret;
+}
+
 static int vmw_cmd_cid_check(struct vmw_private *dev_priv,
 			     struct vmw_sw_context *sw_context,
 			     SVGA3dCmdHeader *header)
 {
+	struct vmw_resource *ctx;
+
 	struct vmw_cid_cmd {
 		SVGA3dCmdHeader header;
 		__le32 cid;
@@ -58,7 +84,8 @@ static int vmw_cmd_cid_check(struct vmw_private *dev_priv,
 	if (likely(sw_context->cid_valid && cmd->cid == sw_context->last_cid))
 		return 0;
 
-	ret = vmw_context_check(dev_priv, sw_context->tfile, cmd->cid);
+	ret = vmw_context_check(dev_priv, sw_context->tfile, cmd->cid,
+				&ctx);
 	if (unlikely(ret != 0)) {
 		DRM_ERROR("Could not find or use context %u\n",
 			  (unsigned) cmd->cid);
@@ -67,39 +94,43 @@ static int vmw_cmd_cid_check(struct vmw_private *dev_priv,
 
 	sw_context->last_cid = cmd->cid;
 	sw_context->cid_valid = true;
-
-	return 0;
+	return vmw_resource_to_validate_list(sw_context, &ctx);
 }
 
 static int vmw_cmd_sid_check(struct vmw_private *dev_priv,
 			     struct vmw_sw_context *sw_context,
 			     uint32_t *sid)
 {
+	struct vmw_surface *srf;
+	int ret;
+	struct vmw_resource *res;
+
 	if (*sid == SVGA3D_INVALID_ID)
 		return 0;
 
-	if (unlikely((!sw_context->sid_valid  ||
-		      *sid != sw_context->last_sid))) {
-		int real_id;
-		int ret = vmw_surface_check(dev_priv, sw_context->tfile,
-					    *sid, &real_id);
-
-		if (unlikely(ret != 0)) {
-			DRM_ERROR("Could ot find or use surface 0x%08x "
-				  "address 0x%08lx\n",
-				  (unsigned int) *sid,
-				  (unsigned long) sid);
-			return ret;
-		}
-
-		sw_context->last_sid = *sid;
-		sw_context->sid_valid = true;
-		*sid = real_id;
-		sw_context->sid_translation = real_id;
-	} else
+	if (likely((sw_context->sid_valid  &&
+		      *sid == sw_context->last_sid))) {
 		*sid = sw_context->sid_translation;
+		return 0;
+	}
 
-	return 0;
+	ret = vmw_user_surface_lookup_handle(dev_priv, sw_context->tfile,
+					     *sid, &srf);
+	if (unlikely(ret != 0)) {
+		DRM_ERROR("Could ot find or use surface 0x%08x "
+			  "address 0x%08lx\n",
+			  (unsigned int) *sid,
+			  (unsigned long) sid);
+		return ret;
+	}
+
+	sw_context->last_sid = *sid;
+	sw_context->sid_valid = true;
+	sw_context->sid_translation = srf->res.id;
+	*sid = sw_context->sid_translation;
+
+	res = &srf->res;
+	return vmw_resource_to_validate_list(sw_context, &res);
 }
 
 
@@ -213,7 +244,7 @@ static int vmw_translate_guest_ptr(struct vmw_private *dev_priv,
 	reloc->location = ptr;
 
 	cur_validate_node = vmw_dmabuf_validate_node(bo, sw_context->cur_val_buf);
-	if (unlikely(cur_validate_node >= VMWGFX_MAX_GMRS)) {
+	if (unlikely(cur_validate_node >= VMWGFX_MAX_VALIDATIONS)) {
 		DRM_ERROR("Max number of DMA buffers per submission"
 			  " exceeded.\n");
 		ret = -EINVAL;
@@ -224,7 +255,8 @@ static int vmw_translate_guest_ptr(struct vmw_private *dev_priv,
 	if (unlikely(cur_validate_node == sw_context->cur_val_buf)) {
 		val_buf = &sw_context->val_bufs[cur_validate_node];
 		val_buf->bo = ttm_bo_reference(bo);
-		val_buf->new_sync_obj_arg = (void *) dev_priv;
+		val_buf->usage = TTM_USAGE_READWRITE;
+		val_buf->new_sync_obj_arg = (void *) DRM_VMW_FENCE_FLAG_EXEC;
 		list_add_tail(&val_buf->head, &sw_context->validate_nodes);
 		++sw_context->cur_val_buf;
 	}
@@ -289,7 +321,6 @@ static int vmw_cmd_wait_query(struct vmw_private *dev_priv,
 	return 0;
 }
 
-
 static int vmw_cmd_dma(struct vmw_private *dev_priv,
 		       struct vmw_sw_context *sw_context,
 		       SVGA3dCmdHeader *header)
@@ -302,6 +333,7 @@ static int vmw_cmd_dma(struct vmw_private *dev_priv,
 		SVGA3dCmdSurfaceDMA dma;
 	} *cmd;
 	int ret;
+	struct vmw_resource *res;
 
 	cmd = container_of(header, struct vmw_dma_cmd, header);
 	ret = vmw_translate_guest_ptr(dev_priv, sw_context,
@@ -318,17 +350,16 @@ static int vmw_cmd_dma(struct vmw_private *dev_priv,
 		goto out_no_reloc;
 	}
 
-	/**
+	/*
 	 * Patch command stream with device SID.
 	 */
-
 	cmd->dma.host.sid = srf->res.id;
 	vmw_kms_cursor_snoop(srf, sw_context->tfile, bo, header);
-	/**
-	 * FIXME: May deadlock here when called from the
-	 * command parsing code.
-	 */
-	vmw_surface_unreference(&srf);
+
+	vmw_dmabuf_unreference(&vmw_bo);
+
+	res = &srf->res;
+	return vmw_resource_to_validate_list(sw_context, &res);
 
 out_no_reloc:
 	vmw_dmabuf_unreference(&vmw_bo);
@@ -500,8 +531,9 @@ out_err:
 
 static int vmw_cmd_check_all(struct vmw_private *dev_priv,
 			     struct vmw_sw_context *sw_context,
-			     void *buf, uint32_t size)
+			     uint32_t size)
 {
+	void *buf = sw_context->cmd_bounce;
 	int32_t cur_size = size;
 	int ret;
 
@@ -550,7 +582,11 @@ static void vmw_apply_relocations(struct vmw_sw_context *sw_context)
 static void vmw_clear_validations(struct vmw_sw_context *sw_context)
 {
 	struct ttm_validate_buffer *entry, *next;
+	uint32_t i = sw_context->num_ref_resources;
 
+	/*
+	 * Drop references to DMA buffers held during command submission.
+	 */
 	list_for_each_entry_safe(entry, next, &sw_context->validate_nodes,
 				 head) {
 		list_del(&entry->head);
@@ -559,6 +595,14 @@ static void vmw_clear_validations(struct vmw_sw_context *sw_context)
 		sw_context->cur_val_buf--;
 	}
 	BUG_ON(sw_context->cur_val_buf != 0);
+
+	/*
+	 * Drop references to resources held during command submission.
+	 */
+	while (i-- > 0) {
+		sw_context->resources[i]->on_validate_list = false;
+		vmw_resource_unreference(&sw_context->resources[i]);
+	}
 }
 
 static int vmw_validate_single_buffer(struct vmw_private *dev_priv,
@@ -602,6 +646,79 @@ static int vmw_validate_buffers(struct vmw_private *dev_priv,
 	return 0;
 }
 
+static int vmw_resize_cmd_bounce(struct vmw_sw_context *sw_context,
+				 uint32_t size)
+{
+	if (likely(sw_context->cmd_bounce_size >= size))
+		return 0;
+
+	if (sw_context->cmd_bounce_size == 0)
+		sw_context->cmd_bounce_size = VMWGFX_CMD_BOUNCE_INIT_SIZE;
+
+	while (sw_context->cmd_bounce_size < size) {
+		sw_context->cmd_bounce_size =
+			PAGE_ALIGN(sw_context->cmd_bounce_size +
+				   (sw_context->cmd_bounce_size >> 1));
+	}
+
+	if (sw_context->cmd_bounce != NULL)
+		vfree(sw_context->cmd_bounce);
+
+	sw_context->cmd_bounce = vmalloc(sw_context->cmd_bounce_size);
+
+	if (sw_context->cmd_bounce == NULL) {
+		DRM_ERROR("Failed to allocate command bounce buffer.\n");
+		sw_context->cmd_bounce_size = 0;
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+/**
+ * vmw_execbuf_fence_commands - create and submit a command stream fence
+ *
+ * Creates a fence object and submits a command stream marker.
+ * If this fails for some reason, We sync the fifo and return NULL.
+ * It is then safe to fence buffers with a NULL pointer.
+ */
+
+int vmw_execbuf_fence_commands(struct drm_file *file_priv,
+			       struct vmw_private *dev_priv,
+			       struct vmw_fence_obj **p_fence,
+			       uint32_t *p_handle)
+{
+	uint32_t sequence;
+	int ret;
+	bool synced = false;
+
+
+	ret = vmw_fifo_send_fence(dev_priv, &sequence);
+	if (unlikely(ret != 0)) {
+		DRM_ERROR("Fence submission error. Syncing.\n");
+		synced = true;
+	}
+
+	if (p_handle != NULL)
+		ret = vmw_user_fence_create(file_priv, dev_priv->fman,
+					    sequence,
+					    DRM_VMW_FENCE_FLAG_EXEC,
+					    p_fence, p_handle);
+	else
+		ret = vmw_fence_create(dev_priv->fman, sequence,
+				       DRM_VMW_FENCE_FLAG_EXEC,
+				       p_fence);
+
+	if (unlikely(ret != 0 && !synced)) {
+		(void) vmw_fallback_wait(dev_priv, false, false,
+					 sequence, false,
+					 VMW_FENCE_WAIT_TIMEOUT);
+		*p_fence = NULL;
+	}
+
+	return 0;
+}
+
 int vmw_execbuf_ioctl(struct drm_device *dev, void *data,
 		      struct drm_file *file_priv)
 {
@@ -612,9 +729,24 @@ int vmw_execbuf_ioctl(struct drm_device *dev, void *data,
 	int ret;
 	void *user_cmd;
 	void *cmd;
-	uint32_t sequence;
 	struct vmw_sw_context *sw_context = &dev_priv->ctx;
 	struct vmw_master *vmaster = vmw_master(file_priv->master);
+	struct vmw_fence_obj *fence;
+	uint32_t handle;
+
+	/*
+	 * This will allow us to extend the ioctl argument while
+	 * maintaining backwards compatibility:
+	 * We take different code paths depending on the value of
+	 * arg->version.
+	 */
+
+	if (unlikely(arg->version != DRM_VMW_EXECBUF_VERSION)) {
+		DRM_ERROR("Incorrect execbuf version.\n");
+		DRM_ERROR("You're running outdated experimental "
+			  "vmwgfx user-space drivers.");
+		return -EINVAL;
+	}
 
 	ret = ttm_read_lock(&vmaster->lock, true);
 	if (unlikely(ret != 0))
@@ -626,20 +758,18 @@ int vmw_execbuf_ioctl(struct drm_device *dev, void *data,
 		goto out_no_cmd_mutex;
 	}
 
-	cmd = vmw_fifo_reserve(dev_priv, arg->command_size);
-	if (unlikely(cmd == NULL)) {
-		DRM_ERROR("Failed reserving fifo space for commands.\n");
-		ret = -ENOMEM;
+	ret = vmw_resize_cmd_bounce(sw_context, arg->command_size);
+	if (unlikely(ret != 0))
 		goto out_unlock;
-	}
 
 	user_cmd = (void __user *)(unsigned long)arg->commands;
-	ret = copy_from_user(cmd, user_cmd, arg->command_size);
+	ret = copy_from_user(sw_context->cmd_bounce,
+			     user_cmd, arg->command_size);
 
 	if (unlikely(ret != 0)) {
 		ret = -EFAULT;
 		DRM_ERROR("Failed copying commands.\n");
-		goto out_commit;
+		goto out_unlock;
 	}
 
 	sw_context->tfile = vmw_fpriv(file_priv)->tfile;
@@ -647,12 +777,14 @@ int vmw_execbuf_ioctl(struct drm_device *dev, void *data,
 	sw_context->sid_valid = false;
 	sw_context->cur_reloc = 0;
 	sw_context->cur_val_buf = 0;
+	sw_context->num_ref_resources = 0;
 
 	INIT_LIST_HEAD(&sw_context->validate_nodes);
 
-	ret = vmw_cmd_check_all(dev_priv, sw_context, cmd, arg->command_size);
+	ret = vmw_cmd_check_all(dev_priv, sw_context, arg->command_size);
 	if (unlikely(ret != 0))
 		goto out_err;
+
 	ret = ttm_eu_reserve_buffers(&sw_context->validate_nodes);
 	if (unlikely(ret != 0))
 		goto out_err;
@@ -664,53 +796,86 @@ int vmw_execbuf_ioctl(struct drm_device *dev, void *data,
 	vmw_apply_relocations(sw_context);
 
 	if (arg->throttle_us) {
-		ret = vmw_wait_lag(dev_priv, &dev_priv->fifo.fence_queue,
+		ret = vmw_wait_lag(dev_priv, &dev_priv->fifo.marker_queue,
 				   arg->throttle_us);
 
 		if (unlikely(ret != 0))
-			goto out_err;
+			goto out_throttle;
 	}
 
+	cmd = vmw_fifo_reserve(dev_priv, arg->command_size);
+	if (unlikely(cmd == NULL)) {
+		DRM_ERROR("Failed reserving fifo space for commands.\n");
+		ret = -ENOMEM;
+		goto out_err;
+	}
+
+	memcpy(cmd, sw_context->cmd_bounce, arg->command_size);
 	vmw_fifo_commit(dev_priv, arg->command_size);
 
-	ret = vmw_fifo_send_fence(dev_priv, &sequence);
-
-	ttm_eu_fence_buffer_objects(&sw_context->validate_nodes,
-				    (void *)(unsigned long) sequence);
-	vmw_clear_validations(sw_context);
-	mutex_unlock(&dev_priv->cmdbuf_mutex);
-
+	user_fence_rep = (struct drm_vmw_fence_rep __user *)
+		(unsigned long)arg->fence_rep;
+	ret = vmw_execbuf_fence_commands(file_priv, dev_priv,
+					 &fence,
+					 (user_fence_rep) ? &handle : NULL);
 	/*
 	 * This error is harmless, because if fence submission fails,
-	 * vmw_fifo_send_fence will sync.
+	 * vmw_fifo_send_fence will sync. The error will be propagated to
+	 * user-space in @fence_rep
 	 */
 
 	if (ret != 0)
 		DRM_ERROR("Fence submission error. Syncing.\n");
 
-	fence_rep.error = ret;
-	fence_rep.fence_seq = (uint64_t) sequence;
-	fence_rep.pad64 = 0;
+	ttm_eu_fence_buffer_objects(&sw_context->validate_nodes,
+				    (void *) fence);
 
-	user_fence_rep = (struct drm_vmw_fence_rep __user *)
-	    (unsigned long)arg->fence_rep;
+	vmw_clear_validations(sw_context);
+	mutex_unlock(&dev_priv->cmdbuf_mutex);
 
-	/*
-	 * copy_to_user errors will be detected by user space not
-	 * seeing fence_rep::error filled in.
-	 */
+	if (user_fence_rep) {
+		fence_rep.error = ret;
+		fence_rep.handle = handle;
+		fence_rep.seqno = fence->seqno;
+		vmw_update_seqno(dev_priv, &dev_priv->fifo);
+		fence_rep.passed_seqno = dev_priv->last_read_seqno;
 
-	ret = copy_to_user(user_fence_rep, &fence_rep, sizeof(fence_rep));
+		/*
+		 * copy_to_user errors will be detected by user space not
+		 * seeing fence_rep::error filled in. Typically
+		 * user-space would have pre-set that member to -EFAULT.
+		 */
+		ret = copy_to_user(user_fence_rep, &fence_rep,
+				   sizeof(fence_rep));
+
+		/*
+		 * User-space lost the fence object. We need to sync
+		 * and unreference the handle.
+		 */
+		if (unlikely(ret != 0) && (fence_rep.error == 0)) {
+			BUG_ON(fence == NULL);
+
+			ttm_ref_object_base_unref(vmw_fpriv(file_priv)->tfile,
+						  handle, TTM_REF_USAGE);
+			DRM_ERROR("Fence copy error. Syncing.\n");
+			(void) vmw_fence_obj_wait(fence,
+						  fence->signal_mask,
+						  false, false,
+						  VMW_FENCE_WAIT_TIMEOUT);
+		}
+	}
+
+	if (likely(fence != NULL))
+		vmw_fence_obj_unreference(&fence);
 
 	vmw_kms_cursor_post_execbuf(dev_priv);
 	ttm_read_unlock(&vmaster->lock);
 	return 0;
 out_err:
 	vmw_free_relocations(sw_context);
+out_throttle:
 	ttm_eu_backoff_reservation(&sw_context->validate_nodes);
 	vmw_clear_validations(sw_context);
-out_commit:
-	vmw_fifo_commit(dev_priv, 0);
 out_unlock:
 	mutex_unlock(&dev_priv->cmdbuf_mutex);
 out_no_cmd_mutex:

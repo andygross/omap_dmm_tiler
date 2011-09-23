@@ -31,10 +31,6 @@
 #include "ttm/ttm_placement.h"
 #include "drmP.h"
 
-#define VMW_RES_CONTEXT ttm_driver_type0
-#define VMW_RES_SURFACE ttm_driver_type1
-#define VMW_RES_STREAM ttm_driver_type2
-
 struct vmw_user_context {
 	struct ttm_base_object base;
 	struct vmw_resource res;
@@ -211,7 +207,7 @@ static void vmw_hw_context_destroy(struct vmw_resource *res)
 	cmd->body.cid = cpu_to_le32(res->id);
 
 	vmw_fifo_commit(dev_priv, sizeof(*cmd));
-	vmw_3d_resource_dec(dev_priv);
+	vmw_3d_resource_dec(dev_priv, false);
 }
 
 static int vmw_context_init(struct vmw_private *dev_priv,
@@ -248,7 +244,7 @@ static int vmw_context_init(struct vmw_private *dev_priv,
 	cmd->body.cid = cpu_to_le32(res->id);
 
 	vmw_fifo_commit(dev_priv, sizeof(*cmd));
-	(void) vmw_3d_resource_inc(dev_priv);
+	(void) vmw_3d_resource_inc(dev_priv, false);
 	vmw_resource_activate(res, vmw_hw_context_destroy);
 	return 0;
 }
@@ -364,7 +360,8 @@ out_err:
 
 int vmw_context_check(struct vmw_private *dev_priv,
 		      struct ttm_object_file *tfile,
-		      int id)
+		      int id,
+		      struct vmw_resource **p_res)
 {
 	struct vmw_resource *res;
 	int ret = 0;
@@ -376,6 +373,8 @@ int vmw_context_check(struct vmw_private *dev_priv,
 			container_of(res, struct vmw_user_context, res);
 		if (ctx->base.tfile != tfile && !ctx->base.shareable)
 			ret = -EPERM;
+		if (p_res)
+			*p_res = vmw_resource_reference(res);
 	} else
 		ret = -EINVAL;
 	read_unlock(&dev_priv->resource_lock);
@@ -408,7 +407,7 @@ static void vmw_hw_surface_destroy(struct vmw_resource *res)
 	cmd->body.sid = cpu_to_le32(res->id);
 
 	vmw_fifo_commit(dev_priv, sizeof(*cmd));
-	vmw_3d_resource_dec(dev_priv);
+	vmw_3d_resource_dec(dev_priv, false);
 }
 
 void vmw_surface_res_free(struct vmw_resource *res)
@@ -476,7 +475,7 @@ int vmw_surface_init(struct vmw_private *dev_priv,
 	}
 
 	vmw_fifo_commit(dev_priv, submit_size);
-	(void) vmw_3d_resource_inc(dev_priv);
+	(void) vmw_3d_resource_inc(dev_priv, false);
 	vmw_resource_activate(res, vmw_hw_surface_destroy);
 	return 0;
 }

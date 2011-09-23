@@ -567,6 +567,9 @@ static int vmw_kms_new_framebuffer_surface(struct vmw_private *dev_priv,
 	case 15:
 		format = SVGA3D_A1R5G5B5;
 		break;
+	case 8:
+		format = SVGA3D_LUMINANCE8;
+		break;
 	default:
 		DRM_ERROR("Invalid color depth: %d\n", mode_cmd->depth);
 		return -EINVAL;
@@ -987,9 +990,9 @@ out:
 	return ret;
 }
 
-void vmw_kms_write_svga(struct vmw_private *vmw_priv,
+int vmw_kms_write_svga(struct vmw_private *vmw_priv,
 			unsigned width, unsigned height, unsigned pitch,
-			unsigned bbp, unsigned depth)
+			unsigned bpp, unsigned depth)
 {
 	if (vmw_priv->capabilities & SVGA_CAP_PITCHLOCK)
 		vmw_write(vmw_priv, SVGA_REG_PITCHLOCK, pitch);
@@ -997,11 +1000,15 @@ void vmw_kms_write_svga(struct vmw_private *vmw_priv,
 		iowrite32(pitch, vmw_priv->mmio_virt + SVGA_FIFO_PITCHLOCK);
 	vmw_write(vmw_priv, SVGA_REG_WIDTH, width);
 	vmw_write(vmw_priv, SVGA_REG_HEIGHT, height);
-	vmw_write(vmw_priv, SVGA_REG_BITS_PER_PIXEL, bbp);
-	vmw_write(vmw_priv, SVGA_REG_DEPTH, depth);
-	vmw_write(vmw_priv, SVGA_REG_RED_MASK, 0x00ff0000);
-	vmw_write(vmw_priv, SVGA_REG_GREEN_MASK, 0x0000ff00);
-	vmw_write(vmw_priv, SVGA_REG_BLUE_MASK, 0x000000ff);
+	vmw_write(vmw_priv, SVGA_REG_BITS_PER_PIXEL, bpp);
+
+	if (vmw_read(vmw_priv, SVGA_REG_DEPTH) != depth) {
+		DRM_ERROR("Invalid depth %u for %u bpp, host expects %u\n",
+			  depth, bpp, vmw_read(vmw_priv, SVGA_REG_DEPTH));
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
 int vmw_kms_save_vga(struct vmw_private *vmw_priv)
@@ -1011,12 +1018,7 @@ int vmw_kms_save_vga(struct vmw_private *vmw_priv)
 
 	vmw_priv->vga_width = vmw_read(vmw_priv, SVGA_REG_WIDTH);
 	vmw_priv->vga_height = vmw_read(vmw_priv, SVGA_REG_HEIGHT);
-	vmw_priv->vga_depth = vmw_read(vmw_priv, SVGA_REG_DEPTH);
 	vmw_priv->vga_bpp = vmw_read(vmw_priv, SVGA_REG_BITS_PER_PIXEL);
-	vmw_priv->vga_pseudo = vmw_read(vmw_priv, SVGA_REG_PSEUDOCOLOR);
-	vmw_priv->vga_red_mask = vmw_read(vmw_priv, SVGA_REG_RED_MASK);
-	vmw_priv->vga_blue_mask = vmw_read(vmw_priv, SVGA_REG_BLUE_MASK);
-	vmw_priv->vga_green_mask = vmw_read(vmw_priv, SVGA_REG_GREEN_MASK);
 	if (vmw_priv->capabilities & SVGA_CAP_PITCHLOCK)
 		vmw_priv->vga_pitchlock =
 		  vmw_read(vmw_priv, SVGA_REG_PITCHLOCK);
@@ -1065,12 +1067,7 @@ int vmw_kms_restore_vga(struct vmw_private *vmw_priv)
 
 	vmw_write(vmw_priv, SVGA_REG_WIDTH, vmw_priv->vga_width);
 	vmw_write(vmw_priv, SVGA_REG_HEIGHT, vmw_priv->vga_height);
-	vmw_write(vmw_priv, SVGA_REG_DEPTH, vmw_priv->vga_depth);
 	vmw_write(vmw_priv, SVGA_REG_BITS_PER_PIXEL, vmw_priv->vga_bpp);
-	vmw_write(vmw_priv, SVGA_REG_PSEUDOCOLOR, vmw_priv->vga_pseudo);
-	vmw_write(vmw_priv, SVGA_REG_RED_MASK, vmw_priv->vga_red_mask);
-	vmw_write(vmw_priv, SVGA_REG_GREEN_MASK, vmw_priv->vga_green_mask);
-	vmw_write(vmw_priv, SVGA_REG_BLUE_MASK, vmw_priv->vga_blue_mask);
 	if (vmw_priv->capabilities & SVGA_CAP_PITCHLOCK)
 		vmw_write(vmw_priv, SVGA_REG_PITCHLOCK,
 			  vmw_priv->vga_pitchlock);
@@ -1093,52 +1090,6 @@ int vmw_kms_restore_vga(struct vmw_private *vmw_priv)
 	}
 
 	return 0;
-}
-
-int vmw_kms_update_layout_ioctl(struct drm_device *dev, void *data,
-				struct drm_file *file_priv)
-{
-	struct vmw_private *dev_priv = vmw_priv(dev);
-	struct drm_vmw_update_layout_arg *arg =
-		(struct drm_vmw_update_layout_arg *)data;
-	struct vmw_master *vmaster = vmw_master(file_priv->master);
-	void __user *user_rects;
-	struct drm_vmw_rect *rects;
-	unsigned rects_size;
-	int ret;
-
-	ret = ttm_read_lock(&vmaster->lock, true);
-	if (unlikely(ret != 0))
-		return ret;
-
-	if (!arg->num_outputs) {
-		struct drm_vmw_rect def_rect = {0, 0, 800, 600};
-		vmw_kms_ldu_update_layout(dev_priv, 1, &def_rect);
-		goto out_unlock;
-	}
-
-	rects_size = arg->num_outputs * sizeof(struct drm_vmw_rect);
-	rects = kzalloc(rects_size, GFP_KERNEL);
-	if (unlikely(!rects)) {
-		ret = -ENOMEM;
-		goto out_unlock;
-	}
-
-	user_rects = (void __user *)(unsigned long)arg->rects;
-	ret = copy_from_user(rects, user_rects, rects_size);
-	if (unlikely(ret != 0)) {
-		DRM_ERROR("Failed to get rects.\n");
-		ret = -EFAULT;
-		goto out_free;
-	}
-
-	vmw_kms_ldu_update_layout(dev_priv, arg->num_outputs, rects);
-
-out_free:
-	kfree(rects);
-out_unlock:
-	ttm_read_unlock(&vmaster->lock);
-	return ret;
 }
 
 bool vmw_kms_validate_mode_vram(struct vmw_private *dev_priv,
