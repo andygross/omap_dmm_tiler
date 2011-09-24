@@ -21,6 +21,7 @@
 #define __ASM_ARM_OMAP_SMARTREFLEX_H
 
 #include <linux/platform_device.h>
+#include <linux/module.h>
 
 #include "voltage.h"
 
