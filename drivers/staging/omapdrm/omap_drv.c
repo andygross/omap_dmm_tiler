@@ -560,6 +560,7 @@ static int dev_load(struct drm_device *dev, unsigned long flags)
 		/* well, limp along without an fbdev.. maybe X11 will work? */
 	}
 
+	omap_gem_init(dev);
 	drm_kms_helper_poll_init(dev);
 
 	ret = drm_vblank_init(dev, priv->num_crtcs);
@@ -587,6 +588,7 @@ static int dev_unload(struct drm_device *dev)
 		ret = plugin->unload(dev);
 	}
 
+	omap_gem_deinit(dev);
 	drm_vblank_cleanup(dev);
 	drm_kms_helper_poll_fini(dev);
 

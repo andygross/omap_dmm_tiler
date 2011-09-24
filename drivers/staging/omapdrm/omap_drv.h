@@ -86,6 +86,8 @@ void omap_framebuffer_flush(struct drm_framebuffer *fb,
 		int x, int y, int w, int h);
 
 
+void omap_gem_init(struct drm_device *dev);
+void omap_gem_deinit(struct drm_device *dev);
 struct drm_gem_object *omap_gem_new(struct drm_device *dev,
 		union omap_gem_size gsize, uint32_t flags);
 int omap_gem_new_handle(struct drm_device *dev, struct drm_file *file,

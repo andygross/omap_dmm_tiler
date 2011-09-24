@@ -4,6 +4,6 @@
 #
 
 ccflags-y := -Iinclude/drm -Werror
-omapdrm-y := omap_drv.o omap_crtc.o omap_encoder.o omap_connector.o omap_fb.o omap_fbdev.o omap_gem.o
+omapdrm-y := omap_drv.o omap_crtc.o omap_encoder.o omap_connector.o omap_fb.o omap_fbdev.o omap_gem.o omap_dmm.o
 
-obj-$(CONFIG_DRM_OMAP)	+= omapdrm.o
+obj-$(CONFIG_DRM_OMAP)	+= omapdrm.o tcm/ dmm/

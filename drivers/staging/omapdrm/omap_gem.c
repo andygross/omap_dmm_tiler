@@ -22,6 +22,7 @@
 #include <linux/shmem_fs.h>
 
 #include "omap_drv.h"
+#include "omap_dmm.h"
 
 /*
  * GEM buffer object implementation.
@@ -39,6 +40,9 @@ struct omap_gem_object {
 	struct drm_gem_object base;
 
 	uint32_t flags;
+
+	/** width/height for tiled formats */
+	uint16_t width, height;
 
 	/**
 	 * If buffer is physically contiguous or remapped in TILER, the
@@ -787,9 +791,22 @@ struct drm_gem_object * omap_gem_new(struct drm_device *dev,
 	struct drm_gem_object *obj = NULL;
 	int ret, size;
 
-	WARN_ON(flags & OMAP_BO_TILED);	/* not implemented yet */
+	if (flags & OMAP_BO_TILED) {
+		/* tiled buffers are always shmem paged backed.. when they are
+		 * scanned out, they are remapped into DMM/TILER
+		 */
+		flags &= ~OMAP_BO_SCANOUT;
 
-	size = PAGE_ALIGN(gsize.bytes);
+		/* align dimensions to slot boundaries... */
+		omap_dmm_align(gem2fmt(flags),
+				&gsize.tiled.width, &gsize.tiled.height);
+
+		/* ...and calculate size based on aligned dimensions */
+		size = omap_dmm_size(gem2fmt(flags),
+				gsize.tiled.width, gsize.tiled.height);
+	} else {
+		size = PAGE_ALIGN(gsize.bytes);
+	}
 
 	omap_obj = kzalloc(sizeof(*omap_obj), GFP_KERNEL);
 	if (!omap_obj) {
@@ -809,6 +826,11 @@ struct drm_gem_object * omap_gem_new(struct drm_device *dev,
 	}
 
 	omap_obj->flags = flags;
+
+	if (flags & OMAP_BO_TILED) {
+		omap_obj->width = gsize.tiled.width;
+		omap_obj->height = gsize.tiled.height;
+	}
 
 	if (flags & (OMAP_BO_DMA|OMAP_BO_EXT_MEM)) {
 		ret = drm_gem_private_object_init(dev, obj, size);
@@ -848,3 +870,21 @@ struct drm_gem_object * omap_gem_new_ext(struct drm_device *dev,
 	return obj;
 }
 EXPORT_SYMBOL(omap_gem_new_ext);
+
+/* init/cleanup.. if DMM is used, we need to set some stuff up.. */
+void omap_gem_init(struct drm_device *dev)
+{
+	int ret = omap_dmm_init(dev);
+	if (ret) {
+		/* DMM is only supported on OMAP4 and later, so this isn't fatal */
+		dev_warn(dev->dev, "omap_dmm_init failed, disabling DMM\n");
+		return;
+	}
+
+	// XXX reserve 4k aligned region for userspace mappings..
+}
+
+void omap_gem_deinit(struct drm_device *dev)
+{
+	omap_dmm_deinit(dev);
+}
