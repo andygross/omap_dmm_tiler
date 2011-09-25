@@ -55,8 +55,6 @@ void omap_drm_unregister_mapper(int id);
 int omap_gem_get_paddr(struct drm_gem_object *obj,
 		dma_addr_t *paddr, bool remap);
 int omap_gem_put_paddr(struct drm_gem_object *obj);
-int omap_gem_get_vaddr(struct drm_gem_object *obj, void **vaddr);
-int omap_gem_put_vaddr(struct drm_gem_object *obj);
 int omap_gem_get_pages(struct drm_gem_object *obj, struct page ***pages);
 int omap_gem_put_pages(struct drm_gem_object *obj);
 

@@ -45,8 +45,12 @@ struct omap_gem_object {
 	uint16_t width, height;
 
 	/**
-	 * If buffer is physically contiguous or remapped in TILER, the
-	 * OMAP_BO_DMA flag is set and the paddr is valid.
+	 * If buffer is allocated physically contiguous, the OMAP_BO_DMA flag
+	 * is set and the paddr is valid.  Also if the buffer is remapped in
+	 * TILER and paddr_cnt > 0, then paddr is valid.  But if you are using
+	 * the physical address and OMAP_BO_DMA is not set, then you should
+	 * be going thru omap_gem_{get,put}_paddr() to ensure the mapping is
+	 * not removed from under your feet.
 	 *
 	 * Note that OMAP_BO_SCANOUT is a hint from userspace that DMA capable
 	 * buffer is requested, but doesn't mean that it is.  Use the
@@ -54,6 +58,11 @@ struct omap_gem_object {
 	 * physical address.
 	 */
 	dma_addr_t paddr;
+
+	/**
+	 * # of users of paddr
+	 */
+	uint32_t paddr_cnt;
 
 	/**
 	 * Array of backing pages, if allocated.  Note that pages are never
@@ -181,6 +190,7 @@ int omap_gem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	struct drm_gem_object *obj = vma->vm_private_data;
 	struct omap_gem_object *omap_obj = to_omap_bo(obj);
 	struct drm_device *dev = obj->dev;
+	struct page **pages;
 	unsigned long pfn;
 	pgoff_t page_offset;
 	int ret;
@@ -195,16 +205,21 @@ int omap_gem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	mutex_lock(&dev->struct_mutex);
 
 	/* if a shmem backed object, make sure we have pages attached now */
-	if (is_shmem(obj) && !omap_obj->pages) {
-		ret = omap_gem_attach_pages(obj);
-		if (ret) {
-			dev_err(dev->dev, "could not attach pages\n");
-			goto fail;
-		}
+	ret = omap_gem_get_pages(obj, &pages);
+	if (ret) {
+		goto fail;
 	}
 
-	if (omap_obj->pages) {
-		pfn = page_to_pfn(omap_obj->pages[page_offset]);
+	/* where should we do corresponding put_pages().. we are mapping
+	 * the original page, rather than thru a GART, so we can't rely
+	 * on eviction to trigger this.  But munmap() or all mappings should
+	 * probably trigger put_pages()?
+	 */
+
+	if (omap_obj->flags & OMAP_BO_TILED) {
+		BUG(); // TODO
+	} else if (pages) {
+		pfn = page_to_pfn(pages[page_offset]);
 	} else {
 		BUG_ON(!(omap_obj->flags & OMAP_BO_DMA));
 		pfn = (omap_obj->paddr >> PAGE_SHIFT) + page_offset;
@@ -340,8 +355,8 @@ int omap_gem_dumb_destroy(struct drm_file *file, struct drm_device *dev,
 int omap_gem_dumb_map_offset(struct drm_file *file, struct drm_device *dev,
 		uint32_t handle, uint64_t *offset)
 {
-	int ret = 0;
 	struct drm_gem_object *obj;
+	int ret = 0;
 
 	mutex_lock(&dev->struct_mutex);
 
@@ -369,15 +384,21 @@ int omap_gem_get_paddr(struct drm_gem_object *obj,
 		dma_addr_t *paddr, bool remap)
 {
 	struct omap_gem_object *omap_obj = to_omap_bo(obj);
+	int ret = 0;
 
-	if (!(omap_obj->flags & OMAP_BO_DMA)) {
+	mutex_lock(&obj->dev->struct_mutex);
+
+	if (is_shmem(obj)) {
 		/* TODO: remap to TILER */
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto fail;
 	}
 
 	*paddr = omap_obj->paddr;
 
-	return 0;
+fail:
+	mutex_unlock(&obj->dev->struct_mutex);
+	return ret;
 }
 EXPORT_SYMBOL(omap_gem_get_paddr);
 
@@ -386,33 +407,20 @@ EXPORT_SYMBOL(omap_gem_get_paddr);
  */
 int omap_gem_put_paddr(struct drm_gem_object *obj)
 {
-	/* do something here when remap to TILER is used.. */
+	struct omap_gem_object *omap_obj = to_omap_bo(obj);
+
+	mutex_lock(&obj->dev->struct_mutex);
+	if (omap_obj->paddr_cnt > 0) {
+		omap_obj->paddr_cnt--;
+		if (omap_obj->paddr_cnt == 0) {
+			/* do something here when remap to TILER is used.. */
+		}
+	}
+	mutex_unlock(&obj->dev->struct_mutex);
+
 	return 0;
 }
 EXPORT_SYMBOL(omap_gem_put_paddr);
-
-/* Get kernel virtual address for CPU access */
-int omap_gem_get_vaddr(struct drm_gem_object *obj, void **vaddr)
-{
-	struct omap_gem_object *omap_obj = to_omap_bo(obj);
-
-	if (!omap_obj->vaddr) {
-		/* TODO */
-		return -ENOMEM;
-	}
-
-	*vaddr = omap_obj->vaddr;
-	return 0;
-}
-EXPORT_SYMBOL(omap_gem_get_vaddr);
-
-/* Release kernel virtual address */
-int omap_gem_put_vaddr(struct drm_gem_object *obj)
-{
-	/* do something when remap to kernel virtual space is used.. */
-	return 0;
-}
-EXPORT_SYMBOL(omap_gem_put_vaddr);
 
 /* acquire pages when needed (for example, for DMA where physically
  * contiguous buffer is not required
@@ -420,18 +428,24 @@ EXPORT_SYMBOL(omap_gem_put_vaddr);
 int omap_gem_get_pages(struct drm_gem_object *obj, struct page ***pages)
 {
 	struct omap_gem_object *omap_obj = to_omap_bo(obj);
-	/* TODO: we could attach/detach pages on demand */
-	int ret;  // XXX below is common in _fault()..
+	int ret = 0;
+
+	mutex_lock(&obj->dev->struct_mutex);
+
 	if (is_shmem(obj) && !omap_obj->pages) {
 		ret = omap_gem_attach_pages(obj);
 		if (ret) {
 			dev_err(obj->dev->dev, "could not attach pages\n");
-			return ret;
+			goto fail;
 		}
 	}
-	/* TODO: even phys-contig.. we should have a list of pages */
+
+	/* TODO: even phys-contig.. we should have a list of pages? */
 	*pages = omap_obj->pages;
-	return 0;
+
+fail:
+	mutex_unlock(&obj->dev->struct_mutex);
+	return ret;
 }
 EXPORT_SYMBOL(omap_gem_get_pages);
 
@@ -445,6 +459,17 @@ int omap_gem_put_pages(struct drm_gem_object *obj)
 	return 0;
 }
 EXPORT_SYMBOL(omap_gem_put_pages);
+
+/* Get kernel virtual address for CPU access.. only buffers that are
+ * allocated contiguously have a kernel virtual address, so this more
+ * or less only exists for omap_fbdev
+ */
+void * omap_gem_vaddr(struct drm_gem_object *obj)
+{
+	struct omap_gem_object *omap_obj = to_omap_bo(obj);
+	return omap_obj->vaddr;
+}
+EXPORT_SYMBOL(omap_gem_vaddr);
 
 /* get buffer flags */
 uint32_t omap_gem_flags(struct drm_gem_object *obj)
@@ -859,8 +884,11 @@ struct drm_gem_object * omap_gem_new_ext(struct drm_device *dev,
 		dma_addr_t paddr, struct page **pages,
 		struct omap_gem_vm_ops *ops)
 {
-	struct drm_gem_object *obj =
-			omap_gem_new(dev, gsize, flags | OMAP_BO_EXT_MEM);
+	struct drm_gem_object *obj;
+
+	BUG_ON((flags & OMAP_BO_TILED) && !pages);
+
+	obj = omap_gem_new(dev, gsize, flags | OMAP_BO_EXT_MEM);
 	if (obj) {
 		struct omap_gem_object *omap_obj = to_omap_bo(obj);
 		omap_obj->paddr = paddr;

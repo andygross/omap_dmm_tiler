@@ -33,7 +33,6 @@ struct omap_framebuffer {
 	struct drm_framebuffer base;
 	struct drm_gem_object *bo;
 	int size;
-	void *vaddr;
 	dma_addr_t paddr;
 };
 
@@ -53,10 +52,6 @@ static void omap_framebuffer_destroy(struct drm_framebuffer *fb)
 	DBG("destroy: FB ID: %d (%p)", fb->base.id, fb);
 
 	drm_framebuffer_cleanup(fb);
-
-	if (omap_fb->vaddr) {
-		omap_gem_put_vaddr(omap_fb->bo);
-	}
 
 	if (omap_gem_put_paddr(omap_fb->bo)) {
 		dev_err(dev->dev, "could not unmap!\n");
@@ -101,7 +96,14 @@ int omap_framebuffer_get_buffer(struct drm_framebuffer *fb, int x, int y,
 	offset = (x * bpp) + (y * fb->pitch);
 
 	if (vaddr) {
-		*vaddr = omap_fb->vaddr + offset;
+		void *bo_vaddr = omap_gem_vaddr(omap_fb->bo);
+		/* note: we can only count on having a vaddr for buffers that
+		 * are allocated physically contiguously to begin with (ie.
+		 * dma_alloc_coherent()).  But this should be ok because it
+		 * is only used by legacy fbdev
+		 */
+		BUG_ON(!bo_vaddr);
+		*vaddr = bo_vaddr + offset;
 	}
 
 	*paddr = omap_fb->paddr + offset;
@@ -243,11 +245,6 @@ struct drm_framebuffer * omap_framebuffer_init(struct drm_device *dev,
 
 	if (omap_gem_get_paddr(bo, &omap_fb->paddr, true)) {
 		dev_err(dev->dev, "could not map (paddr)!\n");
-		goto fail;
-	}
-
-	if (omap_gem_get_vaddr(bo, &omap_fb->vaddr)) {
-		dev_err(dev->dev, "could not map (vaddr)!\n");
 		goto fail;
 	}
 

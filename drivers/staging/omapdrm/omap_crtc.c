@@ -47,8 +47,7 @@ static int commit(struct drm_crtc *crtc)
 	DBG("%s", omap_crtc->ovl->name);
 	DBG("%dx%d -> %dx%d (%d)", info->width, info->height, info->out_width,
 			info->out_height, info->screen_width);
-	DBG("%d,%d %p %08x", info->pos_x, info->pos_y, info->vaddr,
-			info->paddr);
+	DBG("%d,%d %08x", info->pos_x, info->pos_y, info->paddr);
 
 	/* NOTE: do we want to do this at all here, or just wait
 	 * for dpms(ON) since other CRTC's may not have their mode
@@ -92,17 +91,15 @@ static void update_scanout(struct drm_crtc *crtc)
 {
 	struct omap_crtc *omap_crtc = to_omap_crtc(crtc);
 	dma_addr_t paddr;
-	void __iomem *vaddr;
 	unsigned int screen_width;
 
 	omap_framebuffer_get_buffer(crtc->fb, crtc->x, crtc->y,
-			&vaddr, &paddr, &screen_width);
+			NULL, &paddr, &screen_width);
 
-	DBG("%s: %d,%d: %p %08x (%d)", omap_crtc->ovl->name,
-			crtc->x, crtc->y, vaddr, (u32)paddr, screen_width);
+	DBG("%s: %d,%d: %08x (%d)", omap_crtc->ovl->name,
+			crtc->x, crtc->y, (u32)paddr, screen_width);
 
 	omap_crtc->info.paddr = paddr;
-	omap_crtc->info.vaddr = vaddr;
 	omap_crtc->info.screen_width = screen_width;
 }
 
