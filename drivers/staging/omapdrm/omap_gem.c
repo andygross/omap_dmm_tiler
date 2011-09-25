@@ -65,6 +65,11 @@ struct omap_gem_object {
 	uint32_t paddr_cnt;
 
 	/**
+	 * DMM area when buffer is remapped in DMM/TILER.
+	 */
+	struct tcm_area *area;
+
+	/**
 	 * Array of backing pages, if allocated.  Note that pages are never
 	 * allocated for buffers originally allocated from contiguous memory
 	 */
@@ -389,9 +394,44 @@ int omap_gem_get_paddr(struct drm_gem_object *obj,
 	mutex_lock(&obj->dev->struct_mutex);
 
 	if (is_shmem(obj)) {
-		/* TODO: remap to TILER */
-		ret = -ENOMEM;
-		goto fail;
+		if (omap_obj->paddr_cnt == 0) {
+			struct page **pages;
+			enum tiler_fmt fmt = gem2fmt(omap_obj->flags);
+			struct tcm_area *area;
+
+			BUG_ON(omap_obj->area);
+
+			ret = omap_gem_get_pages(obj, &pages);
+			if (ret) {
+				goto fail;
+			}
+
+			if (omap_obj->flags & OMAP_BO_TILED) {
+				area = omap_dmm_reserve_2d(fmt, omap_obj->width, omap_obj->height);
+			} else {
+				area = omap_dmm_reserve_1d(obj->size);
+			}
+
+			if (IS_ERR(area)) {
+				ret = PTR_ERR(area);
+				dev_err(obj->dev->dev, "could not remap: %d (%d)\n", ret, fmt);
+				goto fail;
+			}
+
+			ret = omap_dmm_pin(fmt, area, pages);
+			if (ret) {
+				omap_dmm_release(area);
+				dev_err(obj->dev->dev, "could not pin: %d\n", ret);
+				goto fail;
+			}
+
+			omap_obj->paddr = omap_dmm_ssptr(fmt, area);
+			omap_obj->area = area;
+
+			DBG("got paddr: %08x", omap_obj->paddr);
+		}
+
+		omap_obj->paddr_cnt++;
 	}
 
 	*paddr = omap_obj->paddr;
@@ -408,17 +448,27 @@ EXPORT_SYMBOL(omap_gem_get_paddr);
 int omap_gem_put_paddr(struct drm_gem_object *obj)
 {
 	struct omap_gem_object *omap_obj = to_omap_bo(obj);
+	int ret = 0;
 
 	mutex_lock(&obj->dev->struct_mutex);
 	if (omap_obj->paddr_cnt > 0) {
 		omap_obj->paddr_cnt--;
 		if (omap_obj->paddr_cnt == 0) {
-			/* do something here when remap to TILER is used.. */
+			ret = omap_dmm_unpin(gem2fmt(omap_obj->flags), omap_obj->area);
+			if (ret) {
+				dev_err(obj->dev->dev, "could not unpin pages: %d\n", ret);
+				goto fail;
+			}
+			ret = omap_dmm_release(omap_obj->area);
+			if (ret) {
+				dev_err(obj->dev->dev, "could not release unmap: %d\n", ret);
+			}
+			omap_obj->area = NULL;
 		}
 	}
+fail:
 	mutex_unlock(&obj->dev->struct_mutex);
-
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL(omap_gem_put_paddr);
 

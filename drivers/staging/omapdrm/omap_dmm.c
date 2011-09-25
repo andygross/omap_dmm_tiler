@@ -34,9 +34,18 @@
 #define CONT_HEIGHT_BITS        13
 
 /* calculated constants */
-#define TILER_PAGE              (1 << (SLOT_WIDTH_BITS + SLOT_HEIGHT_BITS))
 #define TILER_WIDTH             (1 << (CONT_WIDTH_BITS - SLOT_WIDTH_BITS))
 #define TILER_HEIGHT            (1 << (CONT_HEIGHT_BITS - SLOT_HEIGHT_BITS))
+
+#define VIEW_SIZE               (1u << (CONT_WIDTH_BITS + CONT_HEIGHT_BITS))
+
+/* location of the various tiler views in physical address space (ssptr) */
+#define TILVIEW_8BIT    0x60000000u
+#define TILVIEW_16BIT   (TILVIEW_8BIT  + VIEW_SIZE)
+#define TILVIEW_32BIT   (TILVIEW_16BIT + VIEW_SIZE)
+#define TILVIEW_PAGE    (TILVIEW_32BIT + VIEW_SIZE)
+#define TILVIEW_END     (TILVIEW_PAGE  + VIEW_SIZE)
+
 
 /* Geometry table */
 #define GEOM2D(xshift, yshift) { \
@@ -103,16 +112,14 @@ static int refill(struct pat_area *area, enum tiler_fmt fmt)
 
 	BUG_ON(!validfmt(fmt));
 
-	/* ensure page addresses reach memory before DMA */
-	wmb();
-
 	return dmm_pat_refill(omap_dmm->dmm[fmt], &pat_desc, MANUAL);
 }
 
-int omap_dmm_fill(struct pat_area *area, enum tiler_fmt fmt,
+static int fill(struct pat_area *area, enum tiler_fmt fmt,
 		struct page **pages)
 {
 	int ret, i = (area->x1 - area->x0) * (area->y1 - area->y0);
+	DBG("%d,%d %d,%d", area->x0, area->y0, area->x1, area->y1);
 	spin_lock(&omap_dmm->lock);
 	while (i--)
 		omap_dmm->refill_va[i] = page_to_phys(pages[i]);
@@ -121,9 +128,10 @@ int omap_dmm_fill(struct pat_area *area, enum tiler_fmt fmt,
 	return ret;
 }
 
-int omap_dmm_clear(struct pat_area *area, enum tiler_fmt fmt)
+static int clear(struct pat_area *area, enum tiler_fmt fmt)
 {
 	int ret, i = (area->x1 - area->x0) * (area->y1 - area->y0);
+	DBG("%d,%d %d,%d", area->x0, area->y0, area->x1, area->y1);
 	spin_lock(&omap_dmm->lock);
 	while (i--)
 		omap_dmm->refill_va[i] = omap_dmm->dummy_pa;
@@ -132,9 +140,116 @@ int omap_dmm_clear(struct pat_area *area, enum tiler_fmt fmt)
 	return ret;
 }
 
+static int slicer(enum tiler_fmt fmt,
+		struct tcm_area *area, struct page **pages,
+		int (*func)(struct pat_area *, enum tiler_fmt, struct page **))
+{
+	int ret = 0;
+	struct tcm_area slice, area_s;
+
+	tcm_for_each_slice(slice, *area, area_s) {
+		struct pat_area p_area = {
+				.x0 = slice.p0.x,
+				.y0 = slice.p0.y,
+				.x1 = slice.p1.x,
+				.y1 = slice.p1.y,
+		};
+
+		ret = func(&p_area, fmt, pages);
+		if (ret)
+			break;
+
+		pages += tcm_sizeof(slice);
+	}
+
+	return ret;
+}
+
+/*
+ * Pin/unpin
+ */
+
+int omap_dmm_pin(enum tiler_fmt fmt, struct tcm_area *area, struct page **pages)
+{
+	int ret = slicer(fmt, area, pages, fill);
+	if (ret) {
+		omap_dmm_unpin(fmt, area);
+		return ret;
+	}
+	return 0;
+}
+
+int omap_dmm_unpin(enum tiler_fmt fmt, struct tcm_area *area)
+{
+	int func(struct pat_area *area, enum tiler_fmt fmt, struct page **pages)
+	{
+		return clear(area, fmt);
+	}
+	return slicer(fmt, area, NULL, func);
+}
+
+/*
+ * Reserve/release
+ */
+
+/* note: w/h must be slot aligned */
+struct tcm_area * omap_dmm_reserve_2d(enum tiler_fmt fmt,
+		uint16_t w, uint16_t h)
+{
+	struct tcm_area *area = kzalloc(sizeof(*area), GFP_KERNEL);
+	int ret;
+	BUG_ON(!validfmt(fmt));
+	ret = tcm_reserve_2d(omap_dmm->tcm[fmt],
+			w / geom[fmt].slot_w, h / geom[fmt].slot_h, 0, area);
+	if (ret) {
+		kfree(area);
+		return ERR_PTR(ret);
+	}
+	return area;
+}
+
+/* note: size must be page aligned */
+struct tcm_area * omap_dmm_reserve_1d(size_t size)
+{
+	struct tcm_area *area = kzalloc(sizeof(*area), GFP_KERNEL);
+	int ret = tcm_reserve_1d(omap_dmm->tcm[TILFMT_8BIT],
+			size >> PAGE_SHIFT, area);
+	if (ret) {
+		kfree(area);
+		return ERR_PTR(ret);
+	}
+	return area;
+}
+
+/* note: if you have pin'd pages, you should have already unpin'd first! */
+int omap_dmm_release(struct tcm_area *area)
+{
+	int ret = tcm_free(area);
+	if (ret) {
+		return ret;
+	}
+	kfree(area);
+	return 0;
+}
+
 /*
  * Utilities
  */
+
+dma_addr_t omap_dmm_ssptr(enum tiler_fmt fmt, struct tcm_area *area)
+{
+	uint32_t stride, offset;
+
+	BUG_ON(!validfmt(fmt));
+
+DBG("%d,%d %d,%d", area->p0.x, area->p0.y, area->p1.x, area->p1.y);
+
+	stride = TILER_WIDTH * geom[fmt].slot_w * geom[fmt].cpp;
+	offset = (stride * geom[fmt].slot_h * area->p0.y) +
+			(geom[fmt].slot_w * geom[fmt].cpp * area->p0.x);
+
+	return offset + TILVIEW_8BIT;
+}
 
 void omap_dmm_align(enum tiler_fmt fmt, uint16_t *w, uint16_t *h)
 {
@@ -231,7 +346,7 @@ int omap_dmm_init(struct drm_device *dev)
 		.x1 = TILER_WIDTH - 1,
 		.y1 = TILER_HEIGHT - 1,
 	};
-	ret = omap_dmm_clear(&area, TILFMT_8BIT);
+	ret = clear(&area, TILFMT_8BIT);
 	if (ret) {
 		dev_err(dev->dev, "could not clear PAT\n");
 		goto fail;

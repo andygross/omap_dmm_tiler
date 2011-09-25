@@ -30,9 +30,23 @@ enum tiler_fmt {
 	TILFMT_NFORMATS
 };
 
+struct tcm_area;
+
 int omap_dmm_init(struct drm_device *dev);
 void omap_dmm_deinit(struct drm_device *dev);
 
+/* pin/unpin */
+int omap_dmm_pin(enum tiler_fmt fmt, struct tcm_area *area, struct page **pages);
+int omap_dmm_unpin(enum tiler_fmt fmt, struct tcm_area *area);
+
+/* reserve/release */
+struct tcm_area * omap_dmm_reserve_2d(enum tiler_fmt fmt,
+		uint16_t w, uint16_t h);
+struct tcm_area * omap_dmm_reserve_1d(size_t size);
+int omap_dmm_release(struct tcm_area *area);
+
+/* utilities */
+dma_addr_t omap_dmm_ssptr(enum tiler_fmt fmt, struct tcm_area *area);
 void omap_dmm_align(enum tiler_fmt fmt, uint16_t *w, uint16_t *h);
 uint32_t omap_dmm_size(enum tiler_fmt fmt, uint16_t w, uint16_t h);
 
