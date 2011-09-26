@@ -62,6 +62,7 @@ uint32_t omap_gem_flags(struct drm_gem_object *obj);
 void * omap_gem_priv(struct drm_gem_object *obj, int mapper_id);
 void omap_gem_set_priv(struct drm_gem_object *obj, int mapper_id, void *priv);
 uint64_t omap_gem_mmap_offset(struct drm_gem_object *obj);
+size_t omap_gem_mmap_size(struct drm_gem_object *obj);
 
 /* for external plugin buffers wrapped as GEM object (via. omap_gem_new_ext())
  * a vm_ops struct can be provided to get callback notification of various

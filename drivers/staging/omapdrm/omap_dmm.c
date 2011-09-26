@@ -34,6 +34,7 @@
 #define CONT_HEIGHT_BITS        13
 
 /* calculated constants */
+#define TILER_PAGE              (1 << (SLOT_WIDTH_BITS + SLOT_HEIGHT_BITS))
 #define TILER_WIDTH             (1 << (CONT_WIDTH_BITS - SLOT_WIDTH_BITS))
 #define TILER_HEIGHT            (1 << (CONT_HEIGHT_BITS - SLOT_HEIGHT_BITS))
 
@@ -48,34 +49,25 @@
 
 
 /* Geometry table */
-#define GEOM2D(xshift, yshift) { \
-		.cpp = 1 << ((xshift) + (yshift)), \
+#define GEOM(xshift, yshift, bytes_per_pixel) { \
+		.x_shft = (xshift), \
+		.y_shft = (yshift), \
+		.cpp    = (bytes_per_pixel), \
 		.slot_w = 1 << (SLOT_WIDTH_BITS - (xshift)), \
 		.slot_h = 1 << (SLOT_HEIGHT_BITS - (yshift)), \
 	}
 static const struct {
+	uint32_t x_shft;	/* unused X-bits (as part of bpp) */
+	uint32_t y_shft;	/* unused Y-bits (as part of bpp) */
 	uint32_t cpp;		/* bytes/chars per pixel */
 	uint32_t slot_w;	/* width of each slot (in pixels) */
 	uint32_t slot_h;	/* height of each slot (in pixels) */
 } geom[TILFMT_NFORMATS] = {
-		[TILFMT_8BIT]  = GEOM2D(0,0),
-		[TILFMT_16BIT] = GEOM2D(0,1),
-		[TILFMT_32BIT] = GEOM2D(1,1),
-		[TILFMT_PAGE]  = { .cpp = 1, .slot_w = 1, .slot_h = 1},
+		[TILFMT_8BIT]  = GEOM(0, 0, 1),
+		[TILFMT_16BIT] = GEOM(0, 1, 2),
+		[TILFMT_32BIT] = GEOM(1, 1, 4),
+		[TILFMT_PAGE]  = GEOM(SLOT_WIDTH_BITS, SLOT_HEIGHT_BITS, 1),
 };
-
-static inline bool validfmt(enum tiler_fmt fmt)
-{
-	switch (fmt) {
-	case TILFMT_8BIT:
-	case TILFMT_16BIT:
-	case TILFMT_32BIT:
-	case TILFMT_PAGE:
-		return true;
-	default:
-		return false;
-	}
-}
 
 /*
  * Instance Data
@@ -192,15 +184,23 @@ int omap_dmm_unpin(enum tiler_fmt fmt, struct tcm_area *area)
  * Reserve/release
  */
 
-/* note: w/h must be slot aligned */
+/* note: w/h/align must be slot aligned */
 struct tcm_area * omap_dmm_reserve_2d(enum tiler_fmt fmt,
-		uint16_t w, uint16_t h)
+		uint16_t w, uint16_t h, uint16_t align)
 {
 	struct tcm_area *area = kzalloc(sizeof(*area), GFP_KERNEL);
 	int ret;
+
 	BUG_ON(!validfmt(fmt));
-	ret = tcm_reserve_2d(omap_dmm->tcm[fmt],
-			w / geom[fmt].slot_w, h / geom[fmt].slot_h, 0, area);
+
+	/* convert width/height to slots */
+	w /= geom[fmt].slot_w;
+	h /= geom[fmt].slot_h;
+
+	/* convert alignment to slots */
+	align /= geom[fmt].slot_w * geom[fmt].cpp;
+
+	ret = tcm_reserve_2d(omap_dmm->tcm[fmt], w, h, align, area);
 	if (ret) {
 		kfree(area);
 		return ERR_PTR(ret);
@@ -236,19 +236,68 @@ int omap_dmm_release(struct tcm_area *area)
  * Utilities
  */
 
+/* tiler space addressing bitfields */
+#define MASK_XY_FLIP		(1 << 31)
+#define MASK_Y_INVERT		(1 << 30)
+#define MASK_X_INVERT		(1 << 29)
+#define SHIFT_ACC_MODE		27
+#define MASK_ACC_MODE		3
+
+#define MASK(bits) ((1 << (bits)) - 1)
+
+/* create tsptr by adding view orientation and access mode */
+#define TIL_ADDR(x, orient, a)\
+	((u32) (x) | (orient) | ((a) << SHIFT_ACC_MODE))
+
+/* calculate the tiler space address of a pixel in a view orientation */
+// 23, 248 ->
+static u32 tiler_get_address(u32 orient, enum tiler_fmt fmt, u32 x, u32 y)
+{
+	u32 x_bits, y_bits, tmp, x_mask, y_mask, alignment;
+
+	x_bits = CONT_WIDTH_BITS - geom[fmt].x_shft;
+	y_bits = CONT_HEIGHT_BITS - geom[fmt].y_shft;
+	alignment = geom[fmt].x_shft + geom[fmt].y_shft;
+
+	/* validate coordinate */
+	x_mask = MASK(x_bits);
+	y_mask = MASK(y_bits);
+DBG("%dx%d, %dx%d", x, y, x_mask, y_mask);
+	if (x < 0 || x > x_mask || y < 0 || y > y_mask)
+		return 0;
+
+	/* account for mirroring */
+	if (orient & MASK_X_INVERT)
+		x ^= x_mask;
+	if (orient & MASK_Y_INVERT)
+		y ^= y_mask;
+
+	/* get coordinate address */
+	if (orient & MASK_XY_FLIP)
+		tmp = ((x << y_bits) + y);
+	else
+		tmp = ((y << x_bits) + x);
+
+	return TIL_ADDR((tmp << alignment), orient, fmt);
+}
+
 dma_addr_t omap_dmm_ssptr(enum tiler_fmt fmt, struct tcm_area *area)
 {
-	uint32_t stride, offset;
-
 	BUG_ON(!validfmt(fmt));
 
-DBG("%d,%d %d,%d", area->p0.x, area->p0.y, area->p1.x, area->p1.y);
+	DBG("%d: %d,%d %d,%d", fmt, area->p0.x, area->p0.y,
+			area->p1.x, area->p1.y);
 
-	stride = TILER_WIDTH * geom[fmt].slot_w * geom[fmt].cpp;
-	offset = (stride * geom[fmt].slot_h * area->p0.y) +
-			(geom[fmt].slot_w * geom[fmt].cpp * area->p0.x);
+	return TILVIEW_8BIT + tiler_get_address(0, fmt,
+			area->p0.x * geom[fmt].slot_w,
+			area->p0.y * geom[fmt].slot_h);
+}
 
-	return offset + TILVIEW_8BIT;
+uint32_t omap_dmm_stride(enum tiler_fmt fmt)
+{
+	BUG_ON(!validfmt(fmt));
+
+	return 1 << (CONT_WIDTH_BITS + geom[fmt].y_shft);
 }
 
 void omap_dmm_align(enum tiler_fmt fmt, uint16_t *w, uint16_t *h)
@@ -260,10 +309,19 @@ void omap_dmm_align(enum tiler_fmt fmt, uint16_t *w, uint16_t *h)
 }
 
 /* note: w/h should be aligned, see omap_dmm_align() */
-uint32_t omap_dmm_size(enum tiler_fmt fmt, uint16_t w, uint16_t h)
+size_t omap_dmm_size(enum tiler_fmt fmt, uint16_t w, uint16_t h)
 {
 	BUG_ON(!validfmt(fmt));
 	return geom[fmt].cpp * w * h;
+}
+
+/* same as omap_dmm_size(), but calculates virtual size based on
+ * rounding up pitch to next PAGE_SIZE boundary
+ */
+size_t omap_dmm_vsize(enum tiler_fmt fmt, uint16_t w, uint16_t h)
+{
+	BUG_ON(!validfmt(fmt));
+	return round_up(geom[fmt].cpp * w, PAGE_SIZE) * h;
 }
 
 /*
@@ -308,7 +366,7 @@ int omap_dmm_init(struct drm_device *dev)
 	 */
 	omap_dmm->refill_va = dma_alloc_coherent(dev->dev,
 			TILER_WIDTH * TILER_WIDTH * sizeof(*omap_dmm->refill_va),
-			&omap_dmm->refill_pa, GFP_ATOMIC);
+			&omap_dmm->refill_pa, GFP_KERNEL);
 	if (!omap_dmm->refill_va) {
 		dev_err(dev->dev, "could not allocate refill buffer\n");
 		ret = -ENOMEM;
@@ -316,7 +374,7 @@ int omap_dmm_init(struct drm_device *dev)
 	}
 
 	/* Allocate tiler container manager (we share 1 on OMAP4) */
-	tcm = sita_init(TILER_WIDTH, TILER_WIDTH, NULL);
+	tcm = sita_init(TILER_WIDTH, TILER_HEIGHT, NULL);
 	if (!tcm) {
 		dev_err(dev->dev, "could not initialize container manager\n");
 		ret = -ENOMEM;
@@ -342,9 +400,9 @@ int omap_dmm_init(struct drm_device *dev)
 	omap_dmm->dmm[TILFMT_PAGE]  = dmm;
 
 	/* clear entire DMM space */
-	area = (struct pat_area){
-		.x1 = TILER_WIDTH - 1,
-		.y1 = TILER_HEIGHT - 1,
+	area = (struct pat_area) {
+			.x1 = TILER_WIDTH - 1,
+			.y1 = TILER_HEIGHT - 1,
 	};
 	ret = clear(&area, TILFMT_8BIT);
 	if (ret) {

@@ -42,8 +42,6 @@
 #define DEBUG(x, y)
 #endif
 
-static struct mutex dmm_mtx;
-
 static struct omap_dmm_platform_data *device_data;
 
 static int dmm_probe(struct platform_device *pdev)
@@ -80,8 +78,6 @@ s32 dmm_pat_refill(struct dmm *dmm, struct pat *pd, enum pat_mode mode)
 	/* Only manual refill supported */
 	if (mode != MANUAL)
 		return ret;
-
-	mutex_lock(&dmm_mtx);
 
 	/* Check that the DMM_PAT_STATUS register has not reported an error */
 	r = dmm->base + DMM_PAT_STATUS__0;
@@ -206,7 +202,6 @@ s32 dmm_pat_refill(struct dmm *dmm, struct pat *pd, enum pat_mode mode)
 	ret = 0;
 
 refill_error:
-	mutex_unlock(&dmm_mtx);
 
 	return ret;
 }
@@ -259,13 +254,11 @@ void dmm_pat_release(struct dmm *dmm)
 
 static s32 __init dmm_init(void)
 {
-	mutex_init(&dmm_mtx);
 	return platform_driver_register(&dmm_driver_ldm);
 }
 
 static void __exit dmm_exit(void)
 {
-	mutex_destroy(&dmm_mtx);
 	platform_driver_unregister(&dmm_driver_ldm);
 }
 

@@ -41,14 +41,16 @@ int omap_dmm_unpin(enum tiler_fmt fmt, struct tcm_area *area);
 
 /* reserve/release */
 struct tcm_area * omap_dmm_reserve_2d(enum tiler_fmt fmt,
-		uint16_t w, uint16_t h);
+		uint16_t w, uint16_t h, uint16_t align);
 struct tcm_area * omap_dmm_reserve_1d(size_t size);
 int omap_dmm_release(struct tcm_area *area);
 
 /* utilities */
 dma_addr_t omap_dmm_ssptr(enum tiler_fmt fmt, struct tcm_area *area);
+uint32_t omap_dmm_stride(enum tiler_fmt fmt);
 void omap_dmm_align(enum tiler_fmt fmt, uint16_t *w, uint16_t *h);
-uint32_t omap_dmm_size(enum tiler_fmt fmt, uint16_t w, uint16_t h);
+size_t omap_dmm_size(enum tiler_fmt fmt, uint16_t w, uint16_t h);
+size_t omap_dmm_vsize(enum tiler_fmt fmt, uint16_t w, uint16_t h);
 
 
 /* GEM bo flags -> tiler fmt */
@@ -63,6 +65,19 @@ static inline enum tiler_fmt gem2fmt(uint32_t flags)
 		return TILFMT_32BIT;
 	default:
 		return TILFMT_PAGE;
+	}
+}
+
+static inline bool validfmt(enum tiler_fmt fmt)
+{
+	switch (fmt) {
+	case TILFMT_8BIT:
+	case TILFMT_16BIT:
+	case TILFMT_32BIT:
+	case TILFMT_PAGE:
+		return true;
+	default:
+		return false;
 	}
 }
 

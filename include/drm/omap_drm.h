@@ -94,7 +94,15 @@ struct drm_omap_gem_cpu_fini {
 struct drm_omap_gem_info {
 	uint32_t handle;		/* buffer handle (in) */
 	uint32_t pad;
-	uint64_t offset;		/* out */
+	uint64_t offset;		/* mmap offset (out) */
+	/* note: in case of tiled buffers, the user virtual size can be
+	 * different from the physical size (ie. how many pages are needed
+	 * to back the object) which is returned in DRM_IOCTL_GEM_OPEN..
+	 * This size here is the one that should be used if you want to
+	 * mmap() the buffer:
+	 */
+	uint32_t size;			/* virtual size for mmap'ing (out) */
+	uint32_t __pad;
 };
 
 #define DRM_OMAP_GET_PARAM		0x00

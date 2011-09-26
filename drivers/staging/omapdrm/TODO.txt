@@ -4,6 +4,12 @@ TODO
 . add video decode/encode support (via syslink3 + codec-engine)
 . still some rough edges with flipping.. event back to userspace should
   really come after VSYNC interrupt
+. where should we do eviction (detatch_pages())?  We aren't necessarily
+  accessing the pages via a GART, so maybe we need some other threshold
+  to put a cap on the # of pages that can be pin'd.  (It is mostly only
+  of interest in case you have a swap partition/file.. which a lot of
+  these devices do not.. but it doesn't hurt for the driver to do the
+  right thing anyways.)
 
 Userspace:
 . git://github.com/robclark/xf86-video-omap.git
