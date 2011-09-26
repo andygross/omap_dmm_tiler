@@ -407,6 +407,19 @@ EXPORT_SYMBOL(drm_gem_free_mmap_offset);
 int
 drm_gem_create_mmap_offset(struct drm_gem_object *obj)
 {
+	return drm_gem_create_mmap_offset_size(obj, obj->size);
+}
+EXPORT_SYMBOL(drm_gem_create_mmap_offset);
+
+/**
+ * drm_gem_create_mmap_offset_size - like drm_gem_create_mmap_offset() but
+ * allows caller to specify an alternate size.  Useful when userspace/virtual
+ * size differs from the physical size (ie. how many pages are allocated to
+ * the object).
+ */
+int
+drm_gem_create_mmap_offset_size(struct drm_gem_object *obj, size_t size)
+{
 	struct drm_device *dev = obj->dev;
 	struct drm_gem_mm *mm = dev->mm_private;
 	struct drm_map_list *list;
@@ -421,12 +434,12 @@ drm_gem_create_mmap_offset(struct drm_gem_object *obj)
 
 	map = list->map;
 	map->type = _DRM_GEM;
-	map->size = obj->size;
+	map->size = size;
 	map->handle = obj;
 
 	/* Get a DRM GEM mmap offset allocated... */
 	list->file_offset_node = drm_mm_search_free(&mm->offset_manager,
-			obj->size / PAGE_SIZE, 0, 0);
+			size / PAGE_SIZE, 0, 0);
 
 	if (!list->file_offset_node) {
 		DRM_ERROR("failed to allocate offset for bo %d\n", obj->name);
@@ -435,7 +448,7 @@ drm_gem_create_mmap_offset(struct drm_gem_object *obj)
 	}
 
 	list->file_offset_node = drm_mm_get_block(list->file_offset_node,
-			obj->size / PAGE_SIZE, 0);
+			size / PAGE_SIZE, 0);
 	if (!list->file_offset_node) {
 		ret = -ENOMEM;
 		goto out_free_list;
@@ -458,7 +471,7 @@ out_free_list:
 
 	return ret;
 }
-EXPORT_SYMBOL(drm_gem_create_mmap_offset);
+EXPORT_SYMBOL(drm_gem_create_mmap_offset_size);
 
 /** Returns a reference to the object named by the handle. */
 struct drm_gem_object *
