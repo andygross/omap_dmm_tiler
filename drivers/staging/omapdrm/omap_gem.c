@@ -42,7 +42,7 @@ struct omap_gem_object {
 
 	uint32_t flags;
 
-	/** width/height for tiled formats */
+	/** width/height for tiled formats (rounded up to slot boundaries) */
 	uint16_t width, height;
 
 	/**
@@ -128,17 +128,33 @@ struct omap_gem_object {
  * for later..
  */
 #define NUM_USERGART_ENTRIES 2
+struct usergart_entry {
+	struct tcm_area *area;		/* the reserved area */
+	dma_addr_t paddr;
+	struct drm_gem_object *obj;	/* the current pinned obj */
+};
 static struct {
-	struct {
-		struct tcm_area *area;		/* the reserved area */
-		dma_addr_t paddr;
-		struct drm_gem_object *obj;	/* the current pinned obj */
-	} entry[NUM_USERGART_ENTRIES];
-	int height, stride;
+	struct usergart_entry entry[NUM_USERGART_ENTRIES];
+	int height;				/* height in rows */
+	int slot_width;			/* width per slot */
+	int stride_pfn;			/* stride in pages */
 	int last;				/* index of last used entry */
 } *usergart;
 
-static inline int evict(struct drm_gem_object *obj)
+static void evict_entry(struct drm_gem_object *obj,
+		struct usergart_entry *entry)
+{
+	if (obj->dev->dev_mapping) {
+		size_t size = omap_gem_mmap_size(obj);
+		loff_t off = omap_gem_mmap_offset(obj);
+		unmap_mapping_range(obj->dev->dev_mapping, off, size, 1);
+	}
+
+	entry->obj = NULL;
+}
+
+/* Evict a buffer from usergart, if it is mapped there */
+static void evict(struct drm_gem_object *obj)
 {
 	struct omap_gem_object *omap_obj = to_omap_bo(obj);
 
@@ -147,45 +163,15 @@ static inline int evict(struct drm_gem_object *obj)
 		int i;
 
 		if (!usergart)
-			return -EFAULT;
+			return;
 
 		for (i = 0; i < NUM_USERGART_ENTRIES; i++) {
-			if (usergart[fmt].entry[i].obj == obj) {
-
-				if (obj->dev->dev_mapping) {
-					size_t size = omap_gem_mmap_size(obj);
-					loff_t off = omap_gem_mmap_offset(obj);
-					unmap_mapping_range(obj->dev->dev_mapping, off, size, 1);
-				}
-
-				usergart[fmt].entry[i].obj = NULL;
+			struct usergart_entry *entry = &usergart[fmt].entry[i];
+			if (entry->obj == obj) {
+				evict_entry(obj, entry);
 			}
 		}
-
 	}
-
-	return 0;
-}
-
-/* Special handling for the case of faulting in 2d tiled buffers */
-static inline int fault_2d(struct drm_gem_object *obj,
-		struct vm_area_struct *vma, pgoff_t page_offset, struct page **pages)
-{
-	struct omap_gem_object *omap_obj = to_omap_bo(obj);
-	enum tiler_fmt fmt = gem2fmt(omap_obj->flags);
-	int idx;
-
-	if (!usergart)
-		return -EFAULT;
-
-	idx = usergart[fmt].last;
-
-	if (usergart[fmt].entry[idx].obj) {
-		evict(usergart[fmt].entry[idx].obj);
-	}
-
-	WARN_ON(1);//finishme
-	return -1;//XXX
 }
 
 /* GEM objects can either be allocated from contiguous memory (in which
@@ -272,6 +258,108 @@ size_t omap_gem_mmap_size(struct drm_gem_object *obj)
 }
 EXPORT_SYMBOL(omap_gem_mmap_size);
 
+
+/* Special handling for the case of faulting in 2d tiled buffers */
+static int fault_2d(struct drm_gem_object *obj,
+		struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	struct omap_gem_object *omap_obj = to_omap_bo(obj);
+	struct usergart_entry *entry;
+	enum tiler_fmt fmt = gem2fmt(omap_obj->flags);
+	struct page *pages[64];  // XXX is this too much to have on stack?
+	unsigned long pfn;
+	pgoff_t pgoff, base_pgoff;
+	void __user *vaddr;
+	int i, ret, slots;
+
+	if (!usergart)
+		return -EFAULT;
+
+	/* TODO: this fxn might need a bit tweaking to deal w/ tiled buffers
+	 * that are wider than 4kb
+	 */
+
+	/* We don't use vmf->pgoff since that has the fake offset: */
+	pgoff = ((unsigned long)vmf->virtual_address -
+			vma->vm_start) >> PAGE_SHIFT;
+
+	/* actual address we start mapping at is rounded down to previous slot
+	 * boundary in the y direction:
+	 */
+	base_pgoff = round_down(pgoff, usergart[fmt].height);
+	vaddr = vmf->virtual_address - ((pgoff - base_pgoff) << PAGE_SHIFT);
+	entry = &usergart[fmt].entry[usergart[fmt].last];
+
+	// XXX convert slot_width (which is a power of 2) to shift value
+	// and then we can do shifts instead of divides:
+	slots = omap_obj->width / usergart[fmt].slot_width;
+
+	/* evict previous buffer using this usergart entry, if any: */
+	if (entry->obj) {
+		evict_entry(entry->obj, entry);
+	}
+
+	/* map in pages.  Note the height of the slot is also equal to the number
+	 * of pages that need to be mapped in to fill 4kb wide CPU page.  If the
+	 * height is 64, then 64 pages fill a 4kb wide by 64 row region.  Beyond
+	 * the valid pixel part of the buffer, we set pages[i] to NULL to get a
+	 * dummy page mapped in.. if someone reads/writes it they will get random/
+	 * undefined content, but at least it won't be corrupting whatever other
+	 * random page used to be mapped in, or other undefined behavior.
+	 */
+	memcpy(pages, &omap_obj->pages[base_pgoff],
+			sizeof(struct page *) * slots);
+DBG("%p, %p, %d, %d", pages, pages+slots, slots,
+		sizeof(struct page *) * (usergart[fmt].height - slots));
+	memset(pages + slots, 0,
+			sizeof(struct page *) * (usergart[fmt].height - slots));
+
+	ret = omap_dmm_pin(fmt, entry->area, pages);
+
+	i = usergart[fmt].height;
+	pfn = entry->paddr >> PAGE_SHIFT;
+
+DBG("Inserting %p pfn %lx, pa %lx", vmf->virtual_address, pfn, pfn << PAGE_SHIFT);
+	VERB("Inserting %p pfn %lx, pa %lx", vmf->virtual_address,
+			pfn, pfn << PAGE_SHIFT);
+
+	while(i--) {
+		vm_insert_mixed(vma, (unsigned long)vaddr, pfn);
+		pfn += usergart[fmt].stride_pfn;
+		vaddr += PAGE_SIZE;
+	}
+
+	/* simple round-robin: */
+	usergart[fmt].last = (usergart[fmt].last + 1) % NUM_USERGART_ENTRIES;
+
+	return 0;
+}
+
+/* Normal handling for the case of faulting in non-tiled buffers */
+static int fault_1d(struct drm_gem_object *obj,
+		struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	struct omap_gem_object *omap_obj = to_omap_bo(obj);
+	unsigned long pfn;
+	pgoff_t pgoff;
+
+	/* We don't use vmf->pgoff since that has the fake offset: */
+	pgoff = ((unsigned long)vmf->virtual_address -
+			vma->vm_start) >> PAGE_SHIFT;
+
+	if (omap_obj->pages) {
+		pfn = page_to_pfn(omap_obj->pages[pgoff]);
+	} else {
+		BUG_ON(!(omap_obj->flags & OMAP_BO_DMA));
+		pfn = (omap_obj->paddr >> PAGE_SHIFT) + pgoff;
+	}
+
+	VERB("Inserting %p pfn %lx, pa %lx", vmf->virtual_address,
+			pfn, pfn << PAGE_SHIFT);
+
+	return vm_insert_mixed(vma, (unsigned long)vmf->virtual_address, pfn);
+}
+
 /**
  * omap_gem_fault		-	pagefault handler for GEM objects
  * @vma: the VMA of the GEM object
@@ -291,13 +379,7 @@ int omap_gem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	struct omap_gem_object *omap_obj = to_omap_bo(obj);
 	struct drm_device *dev = obj->dev;
 	struct page **pages;
-	unsigned long pfn;
-	pgoff_t page_offset;
 	int ret;
-
-	/* We don't use vmf->pgoff since that has the fake offset */
-	page_offset = ((unsigned long)vmf->virtual_address -
-			vma->vm_start) >> PAGE_SHIFT;
 
 	/* Make sure we don't parallel update on a fault, nor move or remove
 	 * something from beneath our feet
@@ -307,7 +389,7 @@ int omap_gem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	/* if a shmem backed object, make sure we have pages attached now */
 	ret = get_pages(obj, &pages);
 	if (ret) {
-		goto out;
+		goto fail;
 	}
 
 	/* where should we do corresponding put_pages().. we are mapping
@@ -317,24 +399,12 @@ int omap_gem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	 */
 
 	if (omap_obj->flags & OMAP_BO_TILED) {
-		BUG(); // TODO
-		ret = fault_2d(obj, vma, page_offset, pages);
-		goto out;
-	}
-
-	if (pages) {
-		pfn = page_to_pfn(pages[page_offset]);
+		ret = fault_2d(obj, vma, vmf);
 	} else {
-		BUG_ON(!(omap_obj->flags & OMAP_BO_DMA));
-		pfn = (omap_obj->paddr >> PAGE_SHIFT) + page_offset;
+		ret = fault_1d(obj, vma, vmf);
 	}
 
-	VERB("Inserting %p pfn %lx, pa %lx", vmf->virtual_address,
-			pfn, pfn << PAGE_SHIFT);
-
-	ret = vm_insert_mixed(vma, (unsigned long)vmf->virtual_address, pfn);
-
-out:
+fail:
 	mutex_unlock(&dev->struct_mutex);
 	switch (ret) {
 	case 0:
@@ -1084,8 +1154,15 @@ void omap_gem_init(struct drm_device *dev)
 	for (i = 0; i < ARRAY_SIZE(fmts); i++) {
 		uint16_t h = 1, w = PAGE_SIZE >> i;
 		omap_dmm_align(fmts[i], &w, &h);
-		usergart[i].stride = omap_dmm_stride(fmts[i]);
+		/* note: since each region is 1 4kb page wide, and minimum
+		 * number of rows, the height ends up being the same as the
+		 * # of pages in the region
+		 */
+		usergart[i].height = h;
+		usergart[i].stride_pfn = omap_dmm_stride(fmts[i]) >> PAGE_SHIFT;
+		usergart[i].slot_width = (PAGE_SIZE / h) >> i;
 		for (j = 0; j < NUM_USERGART_ENTRIES; j++) {
+			struct usergart_entry *entry = &usergart[i].entry[j];
 			struct tcm_area *area =
 					omap_dmm_reserve_2d(fmts[i], w, h, PAGE_SIZE);
 			if (IS_ERR(area)) {
@@ -1093,12 +1170,11 @@ void omap_gem_init(struct drm_device *dev)
 						i, j, PTR_ERR(area));
 				return;
 			}
-			usergart[i].entry[j].paddr = omap_dmm_ssptr(fmts[i], area);
-DBG("%d:%d: %dx%d: %08x %d", i, j, w, h,
-usergart[i].entry[j].paddr, usergart[i].stride);
-			usergart[i].entry[j].area = area;
+			entry->paddr = omap_dmm_ssptr(fmts[i], area);
+DBG("%d:%d: %dx%d: paddr=%08x stride=%d", i, j, w, h,
+entry->paddr, usergart[i].stride_pfn << PAGE_SHIFT);
+			entry->area = area;
 		}
-		usergart[i].height = h;
 	}
 }
 

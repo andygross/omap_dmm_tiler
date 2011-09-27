@@ -2,7 +2,8 @@
  * drivers/staging/omapdrm/omap_dmm.c
  *
  * Copyright (C) 2011 Texas Instruments
- * Author: Rob Clark <rob@ti.com>
+ * Authors: Rob Clark <rob@ti.com>
+ *          Lajos Molnar <molnar@ti.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published by
@@ -94,64 +95,45 @@ static struct {
  * DMM programming
  */
 
-static int refill(struct pat_area *area, enum tiler_fmt fmt)
+static int fill(struct pat_area *area, enum tiler_fmt fmt,
+		struct page **pages)
 {
 	struct pat pat_desc = {
 			.ctrl.start = 1,
 			.area = *area,
 			.data = omap_dmm->refill_pa,
 	};
-
+	int ret, i = (area->x1 - area->x0) * (area->y1 - area->y0);
 	BUG_ON(!validfmt(fmt));
-
-	return dmm_pat_refill(omap_dmm->dmm[fmt], &pat_desc, MANUAL);
-}
-
-static int fill(struct pat_area *area, enum tiler_fmt fmt,
-		struct page **pages)
-{
-	int ret, i = (area->x1 - area->x0) * (area->y1 - area->y0);
 	DBG("%d,%d %d,%d", area->x0, area->y0, area->x1, area->y1);
 	spin_lock(&omap_dmm->lock);
-	while (i--)
-		omap_dmm->refill_va[i] = page_to_phys(pages[i]);
-	ret = refill(area, fmt);
+	while (i--) {
+		omap_dmm->refill_va[i] = (pages && pages[i]) ?
+				page_to_phys(pages[i]) : omap_dmm->dummy_pa;
+	}
+	ret = dmm_pat_refill(omap_dmm->dmm[fmt], &pat_desc, MANUAL);
 	spin_unlock(&omap_dmm->lock);
 	return ret;
 }
 
-static int clear(struct pat_area *area, enum tiler_fmt fmt)
-{
-	int ret, i = (area->x1 - area->x0) * (area->y1 - area->y0);
-	DBG("%d,%d %d,%d", area->x0, area->y0, area->x1, area->y1);
-	spin_lock(&omap_dmm->lock);
-	while (i--)
-		omap_dmm->refill_va[i] = omap_dmm->dummy_pa;
-	ret = refill(area, fmt);
-	spin_unlock(&omap_dmm->lock);
-	return ret;
-}
-
-static int slicer(enum tiler_fmt fmt,
-		struct tcm_area *area, struct page **pages,
-		int (*func)(struct pat_area *, enum tiler_fmt, struct page **))
+static int fill_area(enum tiler_fmt fmt,
+		struct tcm_area *area, struct page **pages)
 {
 	int ret = 0;
 	struct tcm_area slice, area_s;
 
 	tcm_for_each_slice(slice, *area, area_s) {
 		struct pat_area p_area = {
-				.x0 = slice.p0.x,
-				.y0 = slice.p0.y,
-				.x1 = slice.p1.x,
-				.y1 = slice.p1.y,
+				.x0 = slice.p0.x,  .y0 = slice.p0.y,
+				.x1 = slice.p1.x,  .y1 = slice.p1.y,
 		};
 
-		ret = func(&p_area, fmt, pages);
+		ret = fill(&p_area, fmt, pages);
 		if (ret)
 			break;
 
-		pages += tcm_sizeof(slice);
+		if (pages)
+			pages += tcm_sizeof(slice);
 	}
 
 	return ret;
@@ -161,9 +143,12 @@ static int slicer(enum tiler_fmt fmt,
  * Pin/unpin
  */
 
+/* note: slots for which pages[i] == NULL are filled w/ dummy page.. this is
+ * needed for usergart stuff where we partially fill an area
+ */
 int omap_dmm_pin(enum tiler_fmt fmt, struct tcm_area *area, struct page **pages)
 {
-	int ret = slicer(fmt, area, pages, fill);
+	int ret = fill_area(fmt, area, pages);
 	if (ret) {
 		omap_dmm_unpin(fmt, area);
 		return ret;
@@ -173,11 +158,7 @@ int omap_dmm_pin(enum tiler_fmt fmt, struct tcm_area *area, struct page **pages)
 
 int omap_dmm_unpin(enum tiler_fmt fmt, struct tcm_area *area)
 {
-	int func(struct pat_area *area, enum tiler_fmt fmt, struct page **pages)
-	{
-		return clear(area, fmt);
-	}
-	return slicer(fmt, area, NULL, func);
+	return fill_area(fmt, area, NULL);
 }
 
 /*
@@ -284,9 +265,6 @@ DBG("%dx%d, %dx%d", x, y, x_mask, y_mask);
 dma_addr_t omap_dmm_ssptr(enum tiler_fmt fmt, struct tcm_area *area)
 {
 	BUG_ON(!validfmt(fmt));
-
-	DBG("%d: %d,%d %d,%d", fmt, area->p0.x, area->p0.y,
-			area->p1.x, area->p1.y);
 
 	return TILVIEW_8BIT + tiler_get_address(0, fmt,
 			area->p0.x * geom[fmt].slot_w,
@@ -404,7 +382,7 @@ int omap_dmm_init(struct drm_device *dev)
 			.x1 = TILER_WIDTH - 1,
 			.y1 = TILER_HEIGHT - 1,
 	};
-	ret = clear(&area, TILFMT_8BIT);
+	ret = fill(&area, TILFMT_8BIT, NULL);
 	if (ret) {
 		dev_err(dev->dev, "could not clear PAT\n");
 		goto fail;

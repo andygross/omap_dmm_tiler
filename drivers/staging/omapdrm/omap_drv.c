@@ -426,7 +426,7 @@ static int ioctl_gem_new(struct drm_device *dev, void *data,
 		struct drm_file *file_priv)
 {
 	struct drm_omap_gem_new *args = data;
-	DBG("%p:%p: size=%d, flags=%08x", dev, file_priv,
+	DBG("%p:%p: size=0x%08x, flags=%08x", dev, file_priv,
 			args->size.bytes, args->flags);
 	return omap_gem_new_handle(dev, file_priv, args->size,
 			args->flags, &args->handle);
