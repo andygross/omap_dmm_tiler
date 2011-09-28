@@ -2,7 +2,7 @@
  * drivers/staging/omapdrm/omap_dmm.c
  *
  * Copyright (C) 2011 Texas Instruments
- * Authors: Rob Clark <rob@ti.com>
+ * Authors: Rob Clark <rob.clark@linaro.org>
  *          Lajos Molnar <molnar@ti.com>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -77,50 +77,25 @@ static const struct {
 static struct {
 	struct tcm *tcm[TILFMT_NFORMATS];
 	struct dmm *dmm[TILFMT_NFORMATS];
-
-	/* dummy page for clearing unused DMM/PAT slots */
-	struct page *dummy_pg;
-	dma_addr_t dummy_pa;
-
-	/* buffer to use for PAT refill.. PAT refill engine DMA's from
-	 * this buffer to reprogram DMM/PAT slots
-	 */
-	u32 *refill_va;
-	dma_addr_t refill_pa;
-
-	spinlock_t lock;
 } *omap_dmm;
 
 /*
  * DMM programming
  */
 
-static int fill(struct pat_area *area, enum tiler_fmt fmt,
-		struct page **pages)
-{
-	struct pat pat_desc = {
-			.ctrl.start = 1,
-			.area = *area,
-			.data = omap_dmm->refill_pa,
-	};
-	int ret, i = (area->x1 - area->x0) * (area->y1 - area->y0);
-	BUG_ON(!validfmt(fmt));
-	DBG("%d,%d %d,%d", area->x0, area->y0, area->x1, area->y1);
-	spin_lock(&omap_dmm->lock);
-	while (i--) {
-		omap_dmm->refill_va[i] = (pages && pages[i]) ?
-				page_to_phys(pages[i]) : omap_dmm->dummy_pa;
-	}
-	ret = dmm_pat_refill(omap_dmm->dmm[fmt], &pat_desc, MANUAL);
-	spin_unlock(&omap_dmm->lock);
-	return ret;
-}
-
-static int fill_area(enum tiler_fmt fmt,
-		struct tcm_area *area, struct page **pages)
+static int fill(enum tiler_fmt fmt, struct tcm_area *area,
+		struct page **pages, bool wait)
 {
 	int ret = 0;
 	struct tcm_area slice, area_s;
+	struct dmm_txn *txn;
+
+	BUG_ON(!validfmt(fmt));
+
+	txn = dmm_txn_init(omap_dmm->dmm[fmt]);
+	if (IS_ERR_OR_NULL(txn)) {
+		return PTR_ERR(txn);
+	}
 
 	tcm_for_each_slice(slice, *area, area_s) {
 		struct pat_area p_area = {
@@ -128,14 +103,17 @@ static int fill_area(enum tiler_fmt fmt,
 				.x1 = slice.p1.x,  .y1 = slice.p1.y,
 		};
 
-		ret = fill(&p_area, fmt, pages);
+		ret = dmm_txn_append(txn, &p_area, pages);
 		if (ret)
-			break;
+			goto fail;
 
 		if (pages)
 			pages += tcm_sizeof(slice);
 	}
 
+	ret = dmm_txn_commit(txn, wait);
+
+fail:
 	return ret;
 }
 
@@ -146,9 +124,10 @@ static int fill_area(enum tiler_fmt fmt,
 /* note: slots for which pages[i] == NULL are filled w/ dummy page.. this is
  * needed for usergart stuff where we partially fill an area
  */
-int omap_dmm_pin(enum tiler_fmt fmt, struct tcm_area *area, struct page **pages)
+int omap_dmm_pin(enum tiler_fmt fmt, struct tcm_area *area,
+		struct page **pages, bool wait)
 {
-	int ret = fill_area(fmt, area, pages);
+	int ret = fill(fmt, area, pages, wait);
 	if (ret) {
 		omap_dmm_unpin(fmt, area);
 		return ret;
@@ -158,7 +137,7 @@ int omap_dmm_pin(enum tiler_fmt fmt, struct tcm_area *area, struct page **pages)
 
 int omap_dmm_unpin(enum tiler_fmt fmt, struct tcm_area *area)
 {
-	return fill_area(fmt, area, NULL);
+	return fill(fmt, area, NULL, false);
 }
 
 /*
@@ -315,6 +294,7 @@ int omap_dmm_init(struct drm_device *dev)
 {
 	struct tcm *tcm;
 	struct dmm *dmm;
+	struct dmm_txn *txn;
 	struct pat_area area;
 	int ret;
 
@@ -324,29 +304,6 @@ int omap_dmm_init(struct drm_device *dev)
 	omap_dmm = kzalloc(sizeof(*omap_dmm), GFP_KERNEL);
 	if (!omap_dmm) {
 		dev_err(dev->dev, "could not allocate DMM\n");
-		ret = -ENOMEM;
-		goto fail;
-	}
-
-	spin_lock_init(&omap_dmm->lock);
-
-	omap_dmm->dummy_pg = alloc_page(GFP_KERNEL | __GFP_DMA32);
-	if (!omap_dmm->dummy_pg) {
-		dev_err(dev->dev, "could not allocate dummy page\n");
-		ret = -ENOMEM;
-		goto fail;
-	}
-	omap_dmm->dummy_pa = page_to_phys(omap_dmm->dummy_pg);
-
-	/*
-	 * Array of physical pages for PAT programming, which must be a 16-byte
-	 * aligned physical address.
-	 */
-	omap_dmm->refill_va = dma_alloc_coherent(dev->dev,
-			TILER_WIDTH * TILER_WIDTH * sizeof(*omap_dmm->refill_va),
-			&omap_dmm->refill_pa, GFP_KERNEL);
-	if (!omap_dmm->refill_va) {
-		dev_err(dev->dev, "could not allocate refill buffer\n");
 		ret = -ENOMEM;
 		goto fail;
 	}
@@ -382,7 +339,14 @@ int omap_dmm_init(struct drm_device *dev)
 			.x1 = TILER_WIDTH - 1,
 			.y1 = TILER_HEIGHT - 1,
 	};
-	ret = fill(&area, TILFMT_8BIT, NULL);
+	// TODO error checking
+	txn = dmm_txn_init(dmm);
+	if (IS_ERR_OR_NULL(txn)) {
+		ret = PTR_ERR(txn);
+		goto fail;
+	}
+	ret = dmm_txn_append(txn, &area, NULL) ||
+			dmm_txn_commit(txn, false);
 	if (ret) {
 		dev_err(dev->dev, "could not clear PAT\n");
 		goto fail;

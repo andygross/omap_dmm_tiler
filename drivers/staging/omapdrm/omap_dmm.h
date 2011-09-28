@@ -2,7 +2,7 @@
  * drivers/staging/omapdrm/omap_dmm.h
  *
  * Copyright (C) 2011 Texas Instruments
- * Author: Rob Clark <rob@ti.com>
+ * Author: Rob Clark <rob.clark@linaro.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published by
@@ -36,7 +36,8 @@ int omap_dmm_init(struct drm_device *dev);
 void omap_dmm_deinit(struct drm_device *dev);
 
 /* pin/unpin */
-int omap_dmm_pin(enum tiler_fmt fmt, struct tcm_area *area, struct page **pages);
+int omap_dmm_pin(enum tiler_fmt fmt, struct tcm_area *area,
+		struct page **pages, bool wait);
 int omap_dmm_unpin(enum tiler_fmt fmt, struct tcm_area *area);
 
 /* reserve/release */
