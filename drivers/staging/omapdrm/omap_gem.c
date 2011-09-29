@@ -1062,6 +1062,13 @@ struct drm_gem_object * omap_gem_new(struct drm_device *dev,
 		 */
 		flags &= ~OMAP_BO_SCANOUT;
 
+		/* currently don't allow cached buffers.. prefetch can cause
+		 * speculative access to a region that is being refilled, which
+		 * seems to cause badness..
+		 */
+		flags &= ~(OMAP_BO_CACHED|OMAP_BO_WC);
+		flags |= OMAP_BO_UNCACHED;
+
 		/* align dimensions to slot boundaries... */
 		omap_dmm_align(gem2fmt(flags),
 				&gsize.tiled.width, &gsize.tiled.height);
@@ -1172,7 +1179,7 @@ void omap_gem_init(struct drm_device *dev)
 			struct tcm_area *area =
 					omap_dmm_reserve_2d(fmts[i], w, h, PAGE_SIZE);
 			if (IS_ERR(area)) {
-				dev_err(dev->dev, "reserve failed: %d, %d, %ld",
+				dev_err(dev->dev, "reserve failed: %d, %d, %ld\n",
 						i, j, PTR_ERR(area));
 				return;
 			}

@@ -174,6 +174,23 @@ int dmm_txn_commit(struct dmm_txn *txn, bool wait)
 	return 0;
 }
 
+static irqreturn_t dmm_irq_handler(int irq, void *arg)
+{
+	struct dmm *dmm = arg;
+	uint32_t status = readl(dmm->base + DMM_PAT_IRQSTATUS);
+	if (status & 0x0002) {
+		/* FILL_LST0 */
+		// TODO: callback
+	} else if (status & 0x0200) {
+		/* FILL_LST1 */
+		// TODO: callback
+	} else {
+		DBG("status: %08x", status);
+	}
+	writel(status, dmm->base + DMM_PAT_IRQSTATUS);
+	return IRQ_HANDLED;
+}
+
 static int txn_init(struct dmm *dmm, struct dmm_txn *txn, int id)
 {
 	txn->id = id;
@@ -240,6 +257,16 @@ struct dmm * dmm_pat_init(u32 id)
 	writel(0x80000000, dmm->base + DMM_PAT_VIEW_MAP_BASE);
 	writel(0x88888888, dmm->base + DMM_TILER_OR__0);
 	writel(0x88888888, dmm->base + DMM_TILER_OR__1);
+
+	ret = request_irq(device_data->irq, dmm_irq_handler,
+			IRQF_SHARED, "OMAP DMM", dmm);
+	if (ret) {
+		printk(KERN_ERR "dmm: could not request irq!!\n");
+		/* hmm, cleanup! Or maybe we can fall back to polling?  Or? */
+	}
+
+	/* enable some interrupts! */
+	writel(0xfefe, dmm->base + DMM_PAT_IRQENABLE_SET);
 
 	return dmm;
 
