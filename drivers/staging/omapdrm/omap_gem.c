@@ -132,6 +132,7 @@ struct usergart_entry {
 	struct tcm_area *area;		/* the reserved area */
 	dma_addr_t paddr;
 	struct drm_gem_object *obj;	/* the current pinned obj */
+	pgoff_t obj_pgoff;		/* page offset of obj currently mapped in */
 };
 static struct {
 	struct usergart_entry entry[NUM_USERGART_ENTRIES];
@@ -142,11 +143,12 @@ static struct {
 } *usergart;
 
 static void evict_entry(struct drm_gem_object *obj,
-		struct usergart_entry *entry)
+		enum tiler_fmt fmt, struct usergart_entry *entry)
 {
 	if (obj->dev->dev_mapping) {
-		size_t size = omap_gem_mmap_size(obj);
-		loff_t off = omap_gem_mmap_offset(obj);
+		size_t size = PAGE_SIZE * usergart[fmt].height;
+		loff_t off = omap_gem_mmap_offset(obj) +
+				(entry->obj_pgoff << PAGE_SHIFT);
 		unmap_mapping_range(obj->dev->dev_mapping, off, size, 1);
 	}
 
@@ -168,7 +170,7 @@ static void evict(struct drm_gem_object *obj)
 		for (i = 0; i < NUM_USERGART_ENTRIES; i++) {
 			struct usergart_entry *entry = &usergart[fmt].entry[i];
 			if (entry->obj == obj) {
-				evict_entry(obj, entry);
+				evict_entry(obj, fmt, entry);
 			}
 		}
 	}
@@ -259,6 +261,31 @@ size_t omap_gem_mmap_size(struct drm_gem_object *obj)
 EXPORT_SYMBOL(omap_gem_mmap_size);
 
 
+/* Normal handling for the case of faulting in non-tiled buffers */
+static int fault_1d(struct drm_gem_object *obj,
+		struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	struct omap_gem_object *omap_obj = to_omap_bo(obj);
+	unsigned long pfn;
+	pgoff_t pgoff;
+
+	/* We don't use vmf->pgoff since that has the fake offset: */
+	pgoff = ((unsigned long)vmf->virtual_address -
+			vma->vm_start) >> PAGE_SHIFT;
+
+	if (omap_obj->pages) {
+		pfn = page_to_pfn(omap_obj->pages[pgoff]);
+	} else {
+		BUG_ON(!(omap_obj->flags & OMAP_BO_DMA));
+		pfn = (omap_obj->paddr >> PAGE_SHIFT) + pgoff;
+	}
+
+	VERB("Inserting %p pfn %lx, pa %lx", vmf->virtual_address,
+			pfn, pfn << PAGE_SHIFT);
+
+	return vm_insert_mixed(vma, (unsigned long)vmf->virtual_address, pfn);
+}
+
 /* Special handling for the case of faulting in 2d tiled buffers */
 static int fault_2d(struct drm_gem_object *obj,
 		struct vm_area_struct *vma, struct vm_fault *vmf)
@@ -296,8 +323,11 @@ static int fault_2d(struct drm_gem_object *obj,
 
 	/* evict previous buffer using this usergart entry, if any: */
 	if (entry->obj) {
-		evict_entry(entry->obj, entry);
+		evict_entry(entry->obj, fmt, entry);
 	}
+
+	entry->obj = obj;
+	entry->obj_pgoff = base_pgoff;
 
 	/* map in pages.  Note the height of the slot is also equal to the number
 	 * of pages that need to be mapped in to fill 4kb wide CPU page.  If the
@@ -309,18 +339,19 @@ static int fault_2d(struct drm_gem_object *obj,
 	 */
 	memcpy(pages, &omap_obj->pages[base_pgoff],
 			sizeof(struct page *) * slots);
-DBG("%p, %p, %d, %d", pages, pages+slots, slots,
-		sizeof(struct page *) * (usergart[fmt].height - slots));
 	memset(pages + slots, 0,
 			sizeof(struct page *) * (usergart[fmt].height - slots));
 
-	ret = omap_dmm_pin(fmt, entry->area, pages);
+	ret = omap_dmm_pin(fmt, entry->area, pages, true);
+	if (ret) {
+		dev_err(obj->dev->dev, "failed to pin: %d\n", ret);
+		return ret;
+	}
 
 	i = usergart[fmt].height;
 	pfn = entry->paddr >> PAGE_SHIFT;
 
-DBG("Inserting %p pfn %lx, pa %lx", vmf->virtual_address, pfn, pfn << PAGE_SHIFT);
-	VERB("Inserting %p pfn %lx, pa %lx", vmf->virtual_address,
+	DBG("Inserting %p pfn %lx, pa %lx", vmf->virtual_address,
 			pfn, pfn << PAGE_SHIFT);
 
 	while(i--) {
@@ -333,31 +364,6 @@ DBG("Inserting %p pfn %lx, pa %lx", vmf->virtual_address, pfn, pfn << PAGE_SHIFT
 	usergart[fmt].last = (usergart[fmt].last + 1) % NUM_USERGART_ENTRIES;
 
 	return 0;
-}
-
-/* Normal handling for the case of faulting in non-tiled buffers */
-static int fault_1d(struct drm_gem_object *obj,
-		struct vm_area_struct *vma, struct vm_fault *vmf)
-{
-	struct omap_gem_object *omap_obj = to_omap_bo(obj);
-	unsigned long pfn;
-	pgoff_t pgoff;
-
-	/* We don't use vmf->pgoff since that has the fake offset: */
-	pgoff = ((unsigned long)vmf->virtual_address -
-			vma->vm_start) >> PAGE_SHIFT;
-
-	if (omap_obj->pages) {
-		pfn = page_to_pfn(omap_obj->pages[pgoff]);
-	} else {
-		BUG_ON(!(omap_obj->flags & OMAP_BO_DMA));
-		pfn = (omap_obj->paddr >> PAGE_SHIFT) + pgoff;
-	}
-
-	VERB("Inserting %p pfn %lx, pa %lx", vmf->virtual_address,
-			pfn, pfn << PAGE_SHIFT);
-
-	return vm_insert_mixed(vma, (unsigned long)vmf->virtual_address, pfn);
 }
 
 /**
@@ -590,7 +596,7 @@ int omap_gem_get_paddr(struct drm_gem_object *obj,
 				goto fail;
 			}
 
-			ret = omap_dmm_pin(fmt, area, pages);
+			ret = omap_dmm_pin(fmt, area, pages, false);
 			if (ret) {
 				omap_dmm_release(area);
 				dev_err(obj->dev->dev, "could not pin: %d\n", ret);
@@ -1171,9 +1177,10 @@ void omap_gem_init(struct drm_device *dev)
 				return;
 			}
 			entry->paddr = omap_dmm_ssptr(fmts[i], area);
-DBG("%d:%d: %dx%d: paddr=%08x stride=%d", i, j, w, h,
-entry->paddr, usergart[i].stride_pfn << PAGE_SHIFT);
 			entry->area = area;
+
+			DBG("%d:%d: %dx%d: paddr=%08x stride=%d", i, j, w, h,
+					entry->paddr, usergart[i].stride_pfn << PAGE_SHIFT);
 		}
 	}
 }
