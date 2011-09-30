@@ -158,8 +158,6 @@ int dmm_txn_commit(struct dmm_txn *txn, bool wait)
 	/* clear status */
 	writel(0xff << (8 * txn->id), dmm->base + DMM_PAT_IRQSTATUS);
 
-//	dsb();
-
 	/* kick reload */
 	writel(txn->refill_pa, dmm->base + reg[PAT_DESCR][txn->id]);
 

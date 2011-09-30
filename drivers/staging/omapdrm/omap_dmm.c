@@ -210,7 +210,6 @@ int omap_dmm_release(struct tcm_area *area)
 	((u32) (x) | (orient) | ((a) << SHIFT_ACC_MODE))
 
 /* calculate the tiler space address of a pixel in a view orientation */
-// 23, 248 ->
 static u32 tiler_get_address(u32 orient, enum tiler_fmt fmt, u32 x, u32 y)
 {
 	u32 x_bits, y_bits, tmp, x_mask, y_mask, alignment;

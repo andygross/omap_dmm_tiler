@@ -10,6 +10,8 @@ TODO
   of interest in case you have a swap partition/file.. which a lot of
   these devices do not.. but it doesn't hurt for the driver to do the
   right thing anyways.)
+. GEM/shmem backed pages can have existing mappings (kernel linear map,
+  etc..), which isn't really ideal.
 
 Userspace:
 . git://github.com/robclark/xf86-video-omap.git

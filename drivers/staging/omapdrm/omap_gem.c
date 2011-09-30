@@ -319,6 +319,7 @@ static int fault_2d(struct drm_gem_object *obj,
 
 	// XXX convert slot_width (which is a power of 2) to shift value
 	// and then we can do shifts instead of divides:
+	// use ilog2()
 	slots = omap_obj->width / usergart[fmt].slot_width;
 
 	/* evict previous buffer using this usergart entry, if any: */
@@ -328,6 +329,10 @@ static int fault_2d(struct drm_gem_object *obj,
 
 	entry->obj = obj;
 	entry->obj_pgoff = base_pgoff;
+
+	/* now convert base_pgoff to phys offset from virt offset:
+	 */
+	base_pgoff = (base_pgoff / usergart[fmt].height) * slots;
 
 	/* map in pages.  Note the height of the slot is also equal to the number
 	 * of pages that need to be mapped in to fill 4kb wide CPU page.  If the
@@ -351,7 +356,7 @@ static int fault_2d(struct drm_gem_object *obj,
 	i = usergart[fmt].height;
 	pfn = entry->paddr >> PAGE_SHIFT;
 
-	DBG("Inserting %p pfn %lx, pa %lx", vmf->virtual_address,
+	VERB("Inserting %p pfn %lx, pa %lx", vmf->virtual_address,
 			pfn, pfn << PAGE_SHIFT);
 
 	while(i--) {
