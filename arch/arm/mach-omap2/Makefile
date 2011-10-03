@@ -280,3 +280,6 @@ disp-$(CONFIG_OMAP2_DSS)		:= display.o
 obj-y					+= $(disp-m) $(disp-y)
 
 obj-y					+= common-board-devices.o twl-common.o
+
+omap-dmm-$(CONFIG_OMAP_DMM_IOMMU)	+= omap_dmm.o
+obj-y					+= $(omap-dmm-m) $(omap-dmm-y)

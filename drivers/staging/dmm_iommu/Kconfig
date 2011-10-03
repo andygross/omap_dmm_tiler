@@ -1,0 +1,11 @@
+# OMAP DMM IOMMU support
+config OMAP_DMM_IOMMU
+	tristate "OMAP DMM IOMMU Support"
+	depends on ARCH_OMAP4
+	default n
+	select IOMMU_API
+	help
+	  Support for the IOMMUs found on OMAP4+ SoCs.  Provides allocation of
+	  1D or 2D IOVA address space and pinning and unpinning of memory
+
+	  If unsure, say N here.
