@@ -21,33 +21,8 @@
 #include <linux/errno.h>
 #include <linux/err.h>
 
-static struct omap_dmm_aperture apertures[] = {
-	{
-		0x60000000,
-		SZ_128M,
-		TILER_MODE_8BPP,
-	},
-	{
-		0x68000000,
-		SZ_128M,
-		TILER_MODE_16BPP,
-	},
-	{
-		0x70000000,
-		SZ_128M,
-		TILER_MODE_32BPP,
-	},
-	{
-		0x78000000,
-		SZ_128M,
-		TILER_MODE_PAGE,
-	},
-};
-
 static struct omap_dmm_platform_data dmm_data = {
 		.oh_name = "dmm",
-		.num_apertures = ARRAY_SIZE(apertures),
-		.apertures = apertures,
 };
 
 static struct omap_device_pm_latency omap_dmm_latency[] = {

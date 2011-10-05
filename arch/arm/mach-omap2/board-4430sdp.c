@@ -828,7 +828,7 @@ static void __init omap_4430sdp_init(void)
 	if (status)
 		pr_err("Keypad initialization failed: %d\n", status);
 
-	DMM_INIT();
+	omap_dmm_init();
 	omap_4430sdp_display_init();
 }
 

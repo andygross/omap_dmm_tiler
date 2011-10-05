@@ -573,7 +573,7 @@ static void __init omap4_panda_init(void)
 	omap4_twl6030_hsmmc_init(mmc);
 	omap4_ehci_init();
 	usb_musb_init(&musb_board_data);
-	DMM_INIT();
+	omap_dmm_init();
 	omap4_panda_display_init();
 }
 

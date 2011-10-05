@@ -44,15 +44,33 @@
 #define DMM_PAT_IRQENABLE_CLR 0x4B0
 #define DMM_PAT_STATUS__0     0x4C0
 #define DMM_PAT_STATUS__1     0x4C4
-#define DMM_PAT_STATUS__2     0x4C8
-#define DMM_PAT_STATUS__3     0x4CC
 #define DMM_PAT_DESCR__0      0x500
+#define DMM_PAT_DESCR__1      0x510
 #define DMM_PAT_AREA__0       0x504
+#define DMM_PAT_AREA__1	      0x514
 #define DMM_PAT_CTRL__0       0x508
+#define DMM_PAT_CTRL__1       0x518
 #define DMM_PAT_DATA__0       0x50C
+#define DMM_PAT_DATA__1       0x51C
 #define DMM_PEG_HWINFO        0x608
 #define DMM_PEG_PRIO          0x620
 #define DMM_PEG_PRIO_PAT      0x640
+
+#define DMM_IRQSTAT_DST			1<<0
+#define DMM_IRQSTAT_LST			1<<1
+#define DMM_IRQSTAT_ERR_INV_DSC		1<<2
+#define DMM_IRQSTAT_ERR_INV_DATA	1<<3
+#define DMM_IRQSTAT_ERR_UPD_AREA	1<<4
+#define DMM_IRQSTAT_ERR_UPD_CTRL	1<<5
+#define DMM_IRQSTAT_ERR_UPD_DATA	1<<6
+#define DMM_IRQSTAT_ERR_LUT_MISS	1<<7
+
+#define DMM_IRQSTAT_ERR_MASK	(DMM_IRQ_STAT_ERR_INV_DSC | \
+				DMM_IRQ_STAT_ERR_INV_DATA | \
+				DMM_IRQ_STAT_ERR_UPD_AREA | \
+				DMM_IRQ_STAT_ERR_UPD_CTRL | \
+				DMM_IRQ_STAT_ERR_UPD_DATA | \
+				DMM_IRQ_STAT_ERR_LUT_MISS )
 
 enum tiler_mode {
 	TILER_MODE_8BPP = 0,
@@ -70,52 +88,10 @@ enum pat_mode {
 	AUTO
 };
 
-/**
- * Area definition for DMM physical address translator.
- */
-struct pat_area {
-	u32 x0:8;
-	u32 y0:8;
-	u32 x1:8;
-	u32 y1:8;
-};
-
-/**
- * DMM physical address translator control.
- */
-struct pat_ctrl {
-	s32 start:4;
-	s32 dir:4;
-	s32 lut_id:8;
-	s32 sync:12;
-	s32 ini:4;
-};
-
-/**
- * PAT descriptor.
- */
-struct pat {
-	struct pat *next;
-	struct pat_area area;
-	struct pat_ctrl ctrl;
-	u32 data;
-};
-
-struct omap_dmm_aperture {
-	unsigned long base;
-	size_t size;
-	int fmt;
-};
-
 struct omap_dmm_iommu_drvdata {
 	void __iomem *base;
 	int irq;
 
-	int num_apertures;
-
-	/* dmm hw info */
-	int num_refill_engines;
-	int num_luts;
 };
 
 /**
@@ -125,16 +101,10 @@ struct omap_dmm_platform_data {
 	const char *oh_name;
 	void __iomem *base;
 	int irq;
-	int num_apertures;
+	int num_engines;
 	struct omap_dmm_aperture *apertures;
 };
 
 void omap_dmm_init(void);
-
-#ifdef CONFIG_OMAP_DMM_IOMMU
-#define DMM_INIT()	omap_dmm_init()
-#else
-#define DMM_INIT()
-#endif
 
 #endif
