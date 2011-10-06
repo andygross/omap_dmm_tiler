@@ -79,7 +79,6 @@ static int wait_status(struct refill_engine *engine, uint32_t wait_mask)
 		udelay(1);
 	}
 
-	dev_info(engine->dmm->dev, "status returned in %d iterations\n", DMM_FIXED_RETRY_COUNT-i);
 	return 0;
 }
 
@@ -129,7 +128,6 @@ struct dmm_txn * dmm_txn_init(struct dmm *dmm)
 
 	return txn;
 }
-EXPORT_SYMBOL(dmm_txn_init);
 
 /**
  * Add region to DMM transaction.  If pages or pages[i] is NULL, then the
@@ -179,13 +177,8 @@ int dmm_txn_append(struct dmm_txn *txn, struct pat_area *area,
 				page_to_phys(pages[i]) : engine->dmm->dummy_pa;
 	}
 
-	dev_info(engine->dmm->dev, "appended: descr %p - %08x, data %p - %08x\n",
-			txn->allocations[txn->num_slices].descr,
-			txn->allocations[txn->num_slices].descr_pa,
-			txn->allocations[txn->num_slices].data,
-			txn->allocations[txn->num_slices].descr->data_pa);
-
 	txn->num_slices++;
+
 	return 0;
 
 fail_pool:
@@ -194,12 +187,9 @@ fail_pool:
 fail:
 	return 1;
 }
-EXPORT_SYMBOL(dmm_txn_append);
 
 /**
  * Commit the DMM transaction.
- *
- * XXX if irq's work, maybe pass a cb fxn instead.. if no cb, then wait?
  */
 int dmm_txn_commit(struct dmm_txn *txn, bool wait)
 {
@@ -227,20 +217,10 @@ int dmm_txn_commit(struct dmm_txn *txn, bool wait)
 		goto cleanup;
 	}
 
-	dev_info(engine->dmm->dev, "setting descriptor - %08x\n", txn->allocations[0].descr_pa);
-
 	/* kick reload */
 	writel(txn->allocations[0].descr_pa, dmm->base + reg[PAT_DESCR][engine->id]);
 
-	if (wait) {
-		/* wait for engine done: */
-		ret = wait_status(engine, DMM_PATSTATUS_DONE);
-	}
-
-	/* kick reload */
-	writel(NULL, dmm->base + reg[PAT_DESCR][engine->id]);
-	/* kick reload */
-	writel(0xffffffff, dmm->base + DMM_PAT_IRQSTATUS);
+	wait_event_interruptible_timeout(engine->wait_for_refill, 0, HZ / 1000);
 
 	mutex_unlock(&engine->mtx);
 
@@ -259,7 +239,6 @@ cleanup:
 	kfree(txn);
 	return ret;
 }
-EXPORT_SYMBOL(dmm_txn_commit);
 
 static int omap_dmm_iommu_probe(struct platform_device *pdev)
 {
@@ -289,7 +268,14 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 	dmm->dev = &pdev->dev;
 	dmm->num_engines = platdata->num_engines;
 
-#if 0
+	/* initialize DMM registers */
+	writel(0x88888888, dmm->base + DMM_PAT_VIEW__0);
+	writel(0x88888888, dmm->base + DMM_PAT_VIEW__1);
+	writel(0x80808080, dmm->base + DMM_PAT_VIEW_MAP__0);
+	writel(0x80000000, dmm->base + DMM_PAT_VIEW_MAP_BASE);
+	writel(0x88888888, dmm->base + DMM_TILER_OR__0);
+	writel(0x88888888, dmm->base + DMM_TILER_OR__1);
+
 	ret = request_irq(dmm->irq, omap_dmm_irq_handler, IRQF_SHARED,
 				"omap_dmm_irq_handler", dmm);
 
@@ -298,7 +284,10 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 			dmm->irq, ret);
 		goto fail;
 	}
-#endif
+
+	/* enable some interrupts! */
+	writel(0xfefe, dmm->base + DMM_PAT_IRQENABLE_SET);
+
 	dmm->descr_pool = dma_pool_create("dmm_descr", dmm->dev,
 				32*sizeof(struct pat_descr), 16, 0);
 	if (!dmm->descr_pool) {
@@ -331,7 +320,6 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 		mutex_init(&dmm->engines[i].mtx);
 		init_waitqueue_head(&dmm->engines[i].wait_for_refill);
 
-		dev_info(dmm->dev, "engine initialized\n");
 	}
 
 	platform_set_drvdata(pdev, dmm);
@@ -360,9 +348,7 @@ fail_dmapool:
 fail_page:
 	__free_page(dmm->dummy_page);
 fail_irq:
-#if 0
 	free_irq(dmm->irq, dmm);
-#endif
 fail:
 	kfree(dmm);
 	return ret;
@@ -381,9 +367,7 @@ static int omap_dmm_iommu_remove(struct platform_device *pdev)
 
 		kfree(dmm->engines);
 		__free_page(dmm->dummy_page);
-#if 0
 		free_irq(dmm->irq, dmm);
-#endif
 		platform_set_drvdata(pdev, NULL);
 		kfree(dmm);
 	}
