@@ -22,7 +22,8 @@
 #include <linux/err.h>
 
 static struct omap_dmm_platform_data dmm_data = {
-		.oh_name = "dmm",
+	.oh_name = "dmm",
+	.num_engines = 2,
 };
 
 static struct omap_device_pm_latency omap_dmm_latency[] = {
@@ -50,6 +51,8 @@ void __init omap_dmm_init(void)
 		pr_err("Failed to get DMM base initialized\n");
 		return;
 	}
+
+	printk(KERN_ERR "create omap dmm device\n");
 
 	od = omap_device_build(dmm_data.oh_name, -1, oh, &dmm_data,
 				sizeof(dmm_data), omap_dmm_latency,
