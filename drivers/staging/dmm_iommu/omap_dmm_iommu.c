@@ -24,7 +24,7 @@
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/mm.h>
-#include <linux/dmapool.h>
+#include <linux/delay.h>
 
 #include "omap_dmm_priv.h"
 
@@ -36,7 +36,8 @@ struct dmm {
 	struct page *dummy_page;
 	dma_addr_t dummy_pa;
 
-	struct dma_pool *descr_pool;
+	void *refill_va;
+	dma_addr_t refill_pa;
 
 	/* refill engines */
 	struct  refill_engine *engines;
@@ -44,25 +45,42 @@ struct dmm {
 };
 
 /* lookup table for registers w/ per-engine instances */
-static const uint32_t reg[][4] = {
+static const uint32_t reg[][2] = {
 		[PAT_STATUS] = {DMM_PAT_STATUS__0, DMM_PAT_STATUS__1},
 		[PAT_DESCR]  = {DMM_PAT_DESCR__0, DMM_PAT_DESCR__1},
-		[PAT_AREA] = {DMM_PAT_AREA__0, DMM_PAT_AREA__1},
-		[PAT_CTRL] = {DMM_PAT_CTRL__0, DMM_PAT_CTRL__1},
-		[PAT_DATA] = {DMM_PAT_DATA__0, DMM_PAT_DATA__1},
 };
 
+/* simple allocator to grab next 16 byte aligned memory from txn */
+static void * alloc_dma(struct dmm_txn *txn, size_t sz, dma_addr_t *pa)
+{
+        void *ptr;
+	struct refill_engine *engine = txn->engine_handle;
+
+        txn->current_pa = round_up(txn->current_pa, 16);
+        txn->current_va = (void *)round_up((long)txn->current_va, 16);
+
+        ptr = txn->current_va;
+        *pa = txn->current_pa;
+
+        txn->current_pa += sz;
+        txn->current_va += sz;
+
+        BUG_ON((txn->current_va - engine->refill_va) > REFILL_BUFFER_SIZE);
+
+        return ptr;
+}
 
 /* check status and spin until wait_mask comes true */
-static int wait_status(struct refill_engine *engine, uint32_t wait_mask)
+static int wait_status(struct refill_engine *engine, uint32_t wait_mask,
+			uint32_t timeout)
 {
 	struct dmm *dmm = engine->dmm;
 	uint32_t r = 0, err, i;
 
-	i = DMM_FIXED_RETRY_COUNT;
+	i = timeout;
 	while (true) {
 		r = readl(dmm->base + reg[PAT_STATUS][engine->id]);
-		err = r & 0xfc00;
+		err = r & DMM_PATSTATUS_ERR;
 		if (err) {
 			dev_err(dmm->dev, "error: %02x\n", err >> 10);
 			return -EFAULT;
@@ -72,13 +90,13 @@ static int wait_status(struct refill_engine *engine, uint32_t wait_mask)
 			break;
 
 		if (--i == 0) {
-			dev_err(dmm->dev, "error: wait_status timed out\n");
-			return -EFAULT;
+			dev_err(dmm->dev, "timed out waiting for status\n");
+			break;
 		}
-
 		udelay(1);
 	}
 
+	engine->elapsed = timeout - i;
 	return 0;
 }
 
@@ -95,13 +113,11 @@ irqreturn_t omap_dmm_irq_handler(int irq, void *arg)
 	if (status & DMM_IRQSTAT_LST) {
 		/* refill engine 0 done */
 		engine_done[0] = true;
-		atomic_inc(&dmm->engines[0].irq_count);
 	}
 
 	if ((status >> 8) & DMM_IRQSTAT_LST) {
 		/* refill engine 1 done */
 		engine_done[1] = true;
-		atomic_inc(&dmm->engines[1].irq_count);
 	}
 
 	/* ack IRQ */
@@ -122,10 +138,19 @@ struct dmm_txn * dmm_txn_init(struct dmm *dmm)
 {
 	struct dmm_txn *txn = NULL;
 
-	/* for now, just use id 0, which we get from the kzalloc */
 	txn = kzalloc(sizeof(*txn), GFP_KERNEL);
-	txn->engine_handle = &dmm->engines[0];
+	if (!txn) {
+		dev_err(dmm->dev, "failed to allocate txn memory\n");
+		goto err;
+	}
 
+	mutex_lock(&dmm->engines[0].mtx);
+	txn->engine_handle = &dmm->engines[0];
+	txn->last_pat = NULL;
+	txn->current_va = dmm->engines[0].refill_va;
+	txn->current_pa = dmm->engines[0].refill_pa;
+
+err:
 	return txn;
 }
 
@@ -134,58 +159,35 @@ struct dmm_txn * dmm_txn_init(struct dmm *dmm)
  * corresponding slot is cleared (ie. dummy_pa is programmed)
  */
 int dmm_txn_append(struct dmm_txn *txn, struct pat_area *area,
-		struct page **pages)
+                struct page **pages)
 {
+        dma_addr_t pat_pa = 0;
+        uint32_t *data;
+        struct pat *pat;
 	struct refill_engine *engine = txn->engine_handle;
-	struct txn_allocation *txn_alloc = &txn->allocations[txn->num_slices];
-	struct txn_allocation *prev_alloc;
-	int i = (1 + area->x1 - area->x0) * (1 + area->y1 - area->y0);
+        int i = (1 + area->x1 - area->x0) * (1 + area->y1 - area->y0);
 
-	BUG_ON(txn->num_slices >= DMM_MAX_SLICES);
+        pat = alloc_dma(txn, sizeof(struct pat), &pat_pa);
 
-	txn_alloc->descr = dma_pool_alloc(engine->dmm->descr_pool,
-					GFP_KERNEL, &txn_alloc->descr_pa);
+        if (txn->last_pat) {
+                txn->last_pat->next_pa = (uint32_t)pat_pa;
+        }
 
-	if (!txn_alloc->descr) {
-		dev_err(engine->dmm->dev, "failed to get descriptor memory\n");
-		goto fail;
-	}
+        pat->area = *area;
+        pat->ctrl = (struct pat_ctrl){
+                .start = 1,
+        };
 
-	txn_alloc->data_size = 4*i;
-	txn_alloc->data = dma_alloc_coherent(engine->dmm->dev,
-					txn_alloc->data_size,
-					&txn_alloc->descr->data_pa, GFP_KERNEL);
+        data = alloc_dma(txn, 4*i, &pat->data_pa);
 
-	if (!txn_alloc->data) {
-		dev_err(engine->dmm->dev, "failed to allocate pat data\n");
-		goto fail_pool;
-	}
+        while (i--) {
+                data[i] = (pages && pages[i]) ?
+                                page_to_phys(pages[i]) : engine->dmm->dummy_pa;
+        }
 
-	if (txn->num_slices) {
-		prev_alloc = &txn->allocations[txn->num_slices-1];
-		prev_alloc->descr->next_pa = (uint32_t)txn_alloc->descr_pa;
-	}
+        txn->last_pat = pat;
 
-	txn_alloc->descr->area = *area;
-	txn_alloc->descr->ctrl = (struct pat_ctrl){
-		.start = 1,
-	};
-	txn_alloc->descr->next_pa = (uint32_t)NULL;
-
-	while (i--) {
-		txn_alloc->data[i] = (pages && pages[i]) ?
-				page_to_phys(pages[i]) : engine->dmm->dummy_pa;
-	}
-
-	txn->num_slices++;
-
-	return 0;
-
-fail_pool:
-	dma_pool_free(engine->dmm->descr_pool, txn_alloc->descr,
-			txn_alloc->descr_pa);
-fail:
-	return 1;
+        return 0;
 }
 
 /**
@@ -193,24 +195,23 @@ fail:
  */
 int dmm_txn_commit(struct dmm_txn *txn, bool wait)
 {
-	int ret, i;
+	int ret = 0;
 	struct refill_engine *engine = txn->engine_handle;
 	struct dmm *dmm = engine->dmm;
 
-	if (!txn->num_slices) {
+	if (!txn->last_pat) {
 		dev_err(engine->dmm->dev, "need at least one txn\n");
 		ret = -EINVAL;
 		goto cleanup;
 	}
 
-	/* wait on the engine */
-	mutex_lock(&engine->mtx);
+	txn->last_pat->next_pa = 0;
 
 	/* write to PAT_DESCR to clear out any pending transaction */
 	writel(0x0, dmm->base + reg[PAT_DESCR][engine->id]);
 
 	/* wait for engine ready: */
-	ret = wait_status(engine, DMM_PATSTATUS_READY);
+	ret = wait_status(engine, DMM_PATSTATUS_READY, DMM_FIXED_RETRY_COUNT);
 	if (ret) {
 		ret = -EFAULT;
 		mutex_unlock(&engine->mtx);
@@ -218,24 +219,18 @@ int dmm_txn_commit(struct dmm_txn *txn, bool wait)
 	}
 
 	/* kick reload */
-	writel(txn->allocations[0].descr_pa, dmm->base + reg[PAT_DESCR][engine->id]);
+	writel(engine->refill_pa,
+		dmm->base + reg[PAT_DESCR][engine->id]);
 
-	wait_event_interruptible_timeout(engine->wait_for_refill, 0, HZ / 1000);
+	if (wait) {
+		wait_event_interruptible_timeout(engine->wait_for_refill, 0,
+				msecs_to_jiffies(1));
 
-	mutex_unlock(&engine->mtx);
-
-cleanup:
-	/* clean up transaction memory */
-	for (i = 0; i < txn->num_slices; i++) {
-		dma_free_coherent(engine->dmm->dev,
-					txn->allocations[i].data_size,
-					txn->allocations[i].data,
-					txn->allocations[i].descr->data_pa);
-		dma_pool_free(engine->dmm->descr_pool,
-				txn->allocations[i].descr,
-				txn->allocations[i].descr_pa);
+		ret = wait_status(engine, DMM_PATSTATUS_READY, 1);
 	}
 
+cleanup:
+	mutex_unlock(&engine->mtx);
 	kfree(txn);
 	return ret;
 }
@@ -261,8 +256,8 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 	}
 
 	/* HACK, fix the dma mask.... cannot rely on omap_device_build() */
-
 	pdev->dev.coherent_dma_mask = DMA_BIT_MASK(32);
+
 	dmm->base = platdata->base;
 	dmm->irq = platdata->irq;
 	dmm->dev = &pdev->dev;
@@ -288,21 +283,22 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 	/* enable some interrupts! */
 	writel(0xfefe, dmm->base + DMM_PAT_IRQENABLE_SET);
 
-	dmm->descr_pool = dma_pool_create("dmm_descr", dmm->dev,
-				32*sizeof(struct pat_descr), 16, 0);
-	if (!dmm->descr_pool) {
-		dev_err(dmm->dev, "could not allocate descriptor pool\n");
-		ret = -ENOMEM;
-		goto fail_irq;
-	}
-
 	dmm->dummy_page = alloc_page(GFP_KERNEL | __GFP_DMA32);
 	if (!dmm->dummy_page) {
 		dev_err(dmm->dev, "could not allocate dummy page\n");
 		ret = -ENOMEM;
-		goto fail_dmapool;
+		goto fail_irq;
 	}
 	dmm->dummy_pa = page_to_phys(dmm->dummy_page);
+
+	/* alloc refill memory */
+	dmm->refill_va = dma_alloc_coherent(dmm->dev,
+				REFILL_BUFFER_SIZE * dmm->num_engines,
+				&dmm->refill_pa, GFP_KERNEL);
+	if (!dmm->refill_va) {
+		dev_err(dmm->dev, "could not allocate refill memory\n");
+		goto fail_page;
+	}
 
 	/* alloc engines */
 	dmm->engines = kzalloc(dmm->num_engines * sizeof(struct refill_engine),
@@ -310,13 +306,16 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 	if (!dmm->engines) {
 		dev_err(dmm->dev, "could not allocate engines\n");
 		ret = -ENOMEM;
-		goto fail_page;
+		goto fail_refill;
 	}
 
 	for(i=0; i < dmm->num_engines; i++) {
 		dmm->engines[i].id = i;
 		dmm->engines[i].dmm = dmm;
-
+		dmm->engines[i].refill_va = dmm->refill_va + 
+						(REFILL_BUFFER_SIZE * i);
+		dmm->engines[i].refill_pa = dmm->refill_pa + 
+						(REFILL_BUFFER_SIZE * i);
 		mutex_init(&dmm->engines[i].mtx);
 		init_waitqueue_head(&dmm->engines[i].wait_for_refill);
 
@@ -342,9 +341,9 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 
 fail_engines:
 	kfree(dmm->engines);
-
-fail_dmapool:
-	dma_pool_destroy(dmm->descr_pool);
+fail_refill:
+	dma_free_coherent(dmm->dev, REFILL_BUFFER_SIZE * dmm->num_engines,
+				dmm->refill_va, dmm->refill_pa);
 fail_page:
 	__free_page(dmm->dummy_page);
 fail_irq:
@@ -362,9 +361,12 @@ static int omap_dmm_iommu_remove(struct platform_device *pdev)
 	dmm = platform_get_drvdata(pdev);
 
 	if (dmm) {
-		for(i=0; i < dmm->num_engines; i++)
+		for(i=0; i < dmm->num_engines; i++) {
 			mutex_destroy(&dmm->engines[i].mtx);
-
+		}
+		dma_free_coherent(dmm->dev,
+				REFILL_BUFFER_SIZE * dmm->num_engines,
+				dmm->refill_va, dmm->refill_pa);
 		kfree(dmm->engines);
 		__free_page(dmm->dummy_page);
 		free_irq(dmm->irq, dmm);

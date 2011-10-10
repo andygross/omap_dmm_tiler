@@ -21,9 +21,30 @@
 #include <linux/errno.h>
 #include <linux/err.h>
 
+static struct container containers[] = {
+	[0] = {
+		.base = (void *)0x60000000,
+		.format = TILER_MODE_8BPP,
+	},
+	[1] = {
+		.base = (void *)0x68000000,
+		.format = TILER_MODE_16BPP,
+	},
+	[2] = {
+		.base = (void *)0x70000000,
+		.format = TILER_MODE_32BPP,
+	},
+	[3] = {
+		.base = (void *)0x78000000,
+		.format = TILER_MODE_PAGE,
+	},
+};
+
 static struct omap_dmm_platform_data dmm_data = {
 	.oh_name = "dmm",
 	.num_engines = 2,
+	.containers = containers,
+	.num_containers = ARRAY_SIZE(containers),
 };
 
 static struct omap_device_pm_latency omap_dmm_latency[] = {
