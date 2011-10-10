@@ -141,6 +141,9 @@ struct refill_engine {
 	uint8_t *refill_va;
 	dma_addr_t refill_pa;
 
+	/* only one trans per engine for now */
+	struct dmm_txn txn;
+
 	long elapsed; 
 	wait_queue_head_t wait_for_refill;
 	struct mutex mtx;

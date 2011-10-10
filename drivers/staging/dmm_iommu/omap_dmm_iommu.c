@@ -15,7 +15,6 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/platform_device.h> /* platform_device() */
-#include <linux/io.h>              /* ioremap() */
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/wait.h>
@@ -25,6 +24,7 @@
 #include <linux/delay.h>
 #include <linux/mm.h>
 #include <linux/delay.h>
+#include <linux/time.h>
 
 #include "omap_dmm_priv.h"
 
@@ -71,13 +71,12 @@ static void * alloc_dma(struct dmm_txn *txn, size_t sz, dma_addr_t *pa)
 }
 
 /* check status and spin until wait_mask comes true */
-static int wait_status(struct refill_engine *engine, uint32_t wait_mask,
-			uint32_t timeout)
+static int wait_status(struct refill_engine *engine, uint32_t wait_mask)
 {
 	struct dmm *dmm = engine->dmm;
 	uint32_t r = 0, err, i;
 
-	i = timeout;
+	i = DMM_FIXED_RETRY_COUNT;
 	while (true) {
 		r = readl(dmm->base + reg[PAT_STATUS][engine->id]);
 		err = r & DMM_PATSTATUS_ERR;
@@ -96,7 +95,6 @@ static int wait_status(struct refill_engine *engine, uint32_t wait_mask,
 		udelay(1);
 	}
 
-	engine->elapsed = timeout - i;
 	return 0;
 }
 
@@ -138,19 +136,14 @@ struct dmm_txn * dmm_txn_init(struct dmm *dmm)
 {
 	struct dmm_txn *txn = NULL;
 
-	txn = kzalloc(sizeof(*txn), GFP_KERNEL);
-	if (!txn) {
-		dev_err(dmm->dev, "failed to allocate txn memory\n");
-		goto err;
-	}
-
 	mutex_lock(&dmm->engines[0].mtx);
+	dmm->engines[0].elapsed = 0;
+	txn = &dmm->engines[0].txn;
 	txn->engine_handle = &dmm->engines[0];
 	txn->last_pat = NULL;
 	txn->current_va = dmm->engines[0].refill_va;
 	txn->current_pa = dmm->engines[0].refill_pa;
 
-err:
 	return txn;
 }
 
@@ -211,7 +204,7 @@ int dmm_txn_commit(struct dmm_txn *txn, bool wait)
 	writel(0x0, dmm->base + reg[PAT_DESCR][engine->id]);
 
 	/* wait for engine ready: */
-	ret = wait_status(engine, DMM_PATSTATUS_READY, DMM_FIXED_RETRY_COUNT);
+	ret = wait_status(engine, DMM_PATSTATUS_READY);
 	if (ret) {
 		ret = -EFAULT;
 		mutex_unlock(&engine->mtx);
@@ -223,15 +216,14 @@ int dmm_txn_commit(struct dmm_txn *txn, bool wait)
 		dmm->base + reg[PAT_DESCR][engine->id]);
 
 	if (wait) {
-		wait_event_interruptible_timeout(engine->wait_for_refill, 0,
+		ret = wait_event_interruptible_timeout(engine->wait_for_refill,
+				wait_status(engine, DMM_PATSTATUS_READY) == 0,
 				msecs_to_jiffies(1));
 
-		ret = wait_status(engine, DMM_PATSTATUS_READY, 1);
 	}
 
 cleanup:
 	mutex_unlock(&engine->mtx);
-	kfree(txn);
 	return ret;
 }
 
@@ -243,8 +235,6 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 	struct dmm_txn *re;
 	struct page *page_array;
 	struct pat_area area = {0};
-
-	printk(KERN_ERR "omap_dmm_iommu_probe\n");
 
 	if (!platdata)
 		return -ENODEV;
@@ -324,17 +314,16 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, dmm);
 
 	area.x1 = 255;
-	area.y1 = 127;
+	area.y1 = 63;
 	re = dmm_txn_init(dmm);
 	page_array = kzalloc(256*128*sizeof(struct page*), GFP_KERNEL);
 	if (!page_array) {
-		dev_err(dmm->dev, "failed to initialize PAT entries with dummy page\n");
+		dev_err(dmm->dev, "failed to initialize PAT entries\n");
 		goto fail_engines;
 	}
 
 	dmm_txn_append(re, &area, &page_array);
 	dmm_txn_commit(re, true);
-
 	kfree(page_array);
 
 	return 0;
