@@ -27,6 +27,9 @@
 #include <linux/time.h>
 
 #include "omap_dmm_priv.h"
+#include "tcm.h"
+#include "tcm-sita.h"
+
 
 struct dmm {
 	struct device *dev;
@@ -42,6 +45,13 @@ struct dmm {
 	/* refill engines */
 	struct  refill_engine *engines;
 	int num_engines;
+
+	/* container information */
+	int lut_width;
+	int lut_height;
+	int num_lut;
+	struct tcm **tcm;	/* actual LUT container */
+	struct tcm *containers[TILFMT_NFORMATS];	/* mappings for modes */
 };
 
 /* lookup table for registers w/ per-engine instances */
@@ -232,9 +242,8 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 	int ret = -EFAULT, i;
 	struct dmm *dmm;
 	struct omap_dmm_platform_data *platdata = pdev->dev.platform_data;
-	struct dmm_txn *re;
-	struct page *page_array;
-	struct pat_area area = {0};
+	struct dmm_txn *txn;
+	struct pat_area area;
 
 	if (!platdata)
 		return -ENODEV;
@@ -311,23 +320,58 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 
 	}
 
-	platform_set_drvdata(pdev, dmm);
-
-	area.x1 = 255;
-	area.y1 = 63;
-	re = dmm_txn_init(dmm);
-	page_array = kzalloc(256*128*sizeof(struct page*), GFP_KERNEL);
-	if (!page_array) {
-		dev_err(dmm->dev, "failed to initialize PAT entries\n");
+	dmm->tcm = kzalloc(dmm->num_lut * sizeof(*dmm->tcm), GFP_KERNEL);
+	if (!dmm->tcm) {
+		dev_err(dmm->dev, "failed to allocate lut instances\n");
+		ret = -ENOMEM;
 		goto fail_engines;
 	}
 
-	dmm_txn_append(re, &area, &page_array);
-	dmm_txn_commit(re, true);
-	kfree(page_array);
+	/* init containers */
+	for (i = 0; i < dmm->num_lut; i++) {
+		dmm->tcm[i] = sita_init(dmm->lut_width, dmm->lut_height, NULL);
+
+		if (!dmm->tcm[i]) {
+			dev_err(dmm->dev, "failed to allocate container\n");
+			ret = -ENOMEM;
+			goto fail_container;
+		}
+	}
+
+
+	/* assign access mode containers to applicable tcm container */
+	dmm->containers[TILFMT_8BPP] = dmm->tcm[0];
+	dmm->containers[TILFMT_16BPP] = dmm->tcm[0];
+	dmm->containers[TILFMT_32BPP] = dmm->tcm[0];
+	dmm->containers[TILFMT_PAGE] = dmm->tcm[0];
+
+	platform_set_drvdata(pdev, dmm);
+
+	area = (struct pat_area) {
+			.x1 = dmm->lut_width - 1,
+			.y1 = dmm->lut_height - 1,
+	};
+	txn = dmm_txn_init(dmm);
+	if (IS_ERR_OR_NULL(txn)) {
+		ret = PTR_ERR(txn);
+		goto fail_container;
+	}
+
+	ret = dmm_txn_append(txn, &area, NULL);
+	ret |= dmm_txn_commit(txn, true);
+
+	if (ret) {
+		dev_err(dmm->dev, "could not initialize PAT\n");
+		goto fail_container;
+	}
 
 	return 0;
 
+fail_container:
+	for (i = 0; i < dmm->num_lut; i++)
+		if (dmm->tcm[i])
+			dmm->tcm[i]->deinit(dmm->tcm[i]);
+	kfree(dmm->tcm);
 fail_engines:
 	kfree(dmm->engines);
 fail_refill:
@@ -350,6 +394,11 @@ static int omap_dmm_iommu_remove(struct platform_device *pdev)
 	dmm = platform_get_drvdata(pdev);
 
 	if (dmm) {
+		for (i = 0; i < dmm->num_lut; i++)
+			if (dmm->tcm[i])
+				dmm->tcm[i]->deinit(dmm->tcm[i]);
+		kfree(dmm->tcm);
+
 		for(i=0; i < dmm->num_engines; i++) {
 			mutex_destroy(&dmm->engines[i].mtx);
 		}

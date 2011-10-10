@@ -18,11 +18,11 @@
 #define DMM_H
 
 enum tiler_mode {
-	TILER_MODE_8BPP = 0,
-	TILER_MODE_16BPP,
-	TILER_MODE_32BPP,
-	TILER_MODE_PAGE,
-	TILER_MODE_INVALID
+	TILFMT_8BPP = 0,
+	TILFMT_16BPP,
+	TILFMT_32BPP,
+	TILFMT_PAGE,
+	TILFMT_NFORMATS
 };
 
 struct pat_area {
@@ -32,24 +32,18 @@ struct pat_area {
         u32 y1:8;
 };
 
-
-/**
- * platform data
- */
-struct container {
-	void __iomem *base;
-	int lut_id;
-	int y_offset;
-	enum tiler_mode format;
-};
-
 struct omap_dmm_platform_data {
 	const char *oh_name;
 	void __iomem *base;
 	int irq;
+
+	/* number of refill engines in DMM block */
 	int num_engines;
-	struct container *containers;
-	int num_containers;
+
+	/* lookup table information */
+	int num_lut;
+	int lut_width;
+	int lut_height;
 };
 
 void omap_dmm_init(void);

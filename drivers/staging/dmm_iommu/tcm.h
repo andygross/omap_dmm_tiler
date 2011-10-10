@@ -39,8 +39,6 @@
 #ifndef TCM_H
 #define TCM_H
 
-#include "../omap_drv.h"
-
 struct tcm;
 
 /* point */
