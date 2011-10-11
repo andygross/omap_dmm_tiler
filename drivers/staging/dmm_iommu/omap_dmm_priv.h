@@ -17,9 +17,6 @@
 
 #include <mach/dmm.h>
 
-#define DMM_BASE 0x4E000000
-#define DMM_SIZE 0x800
-
 #define DMM_REVISION          0x000
 #define DMM_HWINFO            0x004
 #define DMM_LISA_HWINFO       0x008
@@ -144,16 +141,30 @@ struct refill_engine {
 	/* only one trans per engine for now */
 	struct dmm_txn txn;
 
-	long elapsed; 
 	wait_queue_head_t wait_for_refill;
 	struct mutex mtx;
 };
 
+#if 0
 struct dmm_txn * dmm_txn_init(struct dmm *dmm);
 
 int dmm_txn_append(struct dmm_txn *txn, struct pat_area *area,
 		struct page **pages);
 
 int dmm_txn_commit(struct dmm_txn *txn, bool wait);
+#endif
+
+/* bits representing the same slot in DMM-TILER hw-block */
+#define SLOT_WIDTH_BITS         6
+#define SLOT_HEIGHT_BITS        6
+
+/* bits reserved to describe coordinates in DMM-TILER hw-block */
+#define CONT_WIDTH_BITS         14
+#define CONT_HEIGHT_BITS        13
+
+/* calculated constants */
+#define TILER_PAGE              (1 << (SLOT_WIDTH_BITS + SLOT_HEIGHT_BITS))
+#define TILER_WIDTH             (1 << (CONT_WIDTH_BITS - SLOT_WIDTH_BITS))
+#define TILER_HEIGHT            (1 << (CONT_HEIGHT_BITS - SLOT_HEIGHT_BITS))
 
 #endif

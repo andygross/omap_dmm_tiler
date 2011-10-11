@@ -48,4 +48,37 @@ struct omap_dmm_platform_data {
 
 void omap_dmm_init(void);
 
+struct tcm_area;
+
+/* pin/unpin */
+int omap_dmm_pin(enum tiler_mode fmt, struct tcm_area *area,
+                struct page **pages, bool wait);
+int omap_dmm_unpin(enum tiler_mode fmt, struct tcm_area *area);
+
+/* reserve/release */
+struct tcm_area * omap_dmm_reserve_2d(enum tiler_mode fmt,
+                uint16_t w, uint16_t h, uint16_t align);
+struct tcm_area * omap_dmm_reserve_1d(size_t size);
+int omap_dmm_release(struct tcm_area *area);
+
+/* utilities */
+dma_addr_t omap_dmm_ssptr(enum tiler_mode fmt, struct tcm_area *area);
+uint32_t omap_dmm_stride(enum tiler_mode fmt);
+void omap_dmm_align(enum tiler_mode fmt, uint16_t *w, uint16_t *h);
+size_t omap_dmm_size(enum tiler_mode fmt, uint16_t w, uint16_t h);
+size_t omap_dmm_vsize(enum tiler_mode fmt, uint16_t w, uint16_t h);
+
+static inline bool validfmt(enum tiler_mode fmt)
+{
+        switch (fmt) {
+        case TILFMT_8BPP:
+        case TILFMT_16BPP:
+        case TILFMT_32BPP:
+        case TILFMT_PAGE:
+                return true;
+        default:
+                return false;
+        }
+}
+
 #endif
