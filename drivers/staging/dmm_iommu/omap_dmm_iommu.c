@@ -25,39 +25,28 @@
 #include <linux/mm.h>
 #include <linux/delay.h>
 #include <linux/time.h>
+#include <linux/list.h>
+#include <linux/seq_file.h>
+#include <linux/debugfs.h>
 
-#include "omap_dmm_priv.h"
 #include "tcm.h"
 #include "tcm-sita.h"
-
-
-struct dmm {
-	struct device *dev;
-	void __iomem *base;
-	int irq;
-
-	struct page *dummy_page;
-	dma_addr_t dummy_pa;
-
-	void *refill_va;
-	dma_addr_t refill_pa;
-
-	/* refill engines */
-	struct  refill_engine *engines;
-	int num_engines;
-
-	/* container information */
-	int lut_width;
-	int lut_height;
-	int num_lut;
-
-	/* array of LUT - TCM containers */
-	struct tcm **tcm;
-};
+#include "omap_dmm_priv.h"
 
 /* mappings for associating views to luts */
 static struct tcm *containers[TILFMT_NFORMATS];
 static struct dmm *omap_dmm;
+
+struct iova_info {
+	struct list_head iova_node;	/* node for global iova list */
+	u32 *phys_array;		/* list of page physical addresses */
+	u32 num_pages;
+	struct tcm_area area;		/* area */
+	enum tiler_mode fmt;		/* format */
+};
+
+static LIST_HEAD(iova_head);		/* list of all allocations */
+static DEFINE_SPINLOCK(list_lock);	/* spinlock used for list protection */
 
 /* Geometry table */
 #define GEOM(xshift, yshift, bytes_per_pixel) { \
@@ -189,7 +178,7 @@ static struct dmm_txn * dmm_txn_init(struct dmm *dmm)
  * corresponding slot is cleared (ie. dummy_pa is programmed)
  */
 static int dmm_txn_append(struct dmm_txn *txn, struct pat_area *area,
-                struct page **pages)
+                u32 *phys_array)
 {
         dma_addr_t pat_pa = 0;
         uint32_t *data;
@@ -213,8 +202,8 @@ static int dmm_txn_append(struct dmm_txn *txn, struct pat_area *area,
         data = alloc_dma(txn, 4*i, &pat->data_pa);
 
         while (i--) {
-                data[i] = (pages && pages[i]) ?
-                                page_to_phys(pages[i]) : engine->dmm->dummy_pa;
+                data[i] = (phys_array && phys_array[i]) ?
+                                phys_array[i] : engine->dmm->dummy_pa;
         }
 
         txn->last_pat = pat;
@@ -272,14 +261,11 @@ cleanup:
  * DMM programming
  */
 
-static int fill(enum tiler_mode fmt, struct tcm_area *area,
-		struct page **pages, bool wait)
+static int fill(struct tcm_area *area, u32 *phys_array, bool wait)
 {
 	int ret = 0;
 	struct tcm_area slice, area_s;
 	struct dmm_txn *txn;
-
-	BUG_ON(!validfmt(fmt));
 
 	txn = dmm_txn_init(omap_dmm);
 	if (IS_ERR_OR_NULL(txn)) {
@@ -292,12 +278,12 @@ static int fill(enum tiler_mode fmt, struct tcm_area *area,
 				.x1 = slice.p1.x,  .y1 = slice.p1.y,
 		};
 
-		ret = dmm_txn_append(txn, &p_area, pages);
+		ret = dmm_txn_append(txn, &p_area, phys_array);
 		if (ret)
 			goto fail;
 
-		if (pages)
-			pages += tcm_sizeof(slice);
+		if (phys_array)
+			phys_array += tcm_sizeof(slice);
 	}
 
 	ret = dmm_txn_commit(txn, wait);
@@ -310,76 +296,299 @@ fail:
  * Pin/unpin
  */
 
-/* note: slots for which pages[i] == NULL are filled w/ dummy page.. this is
- * needed for usergart stuff where we partially fill an area
+/* note: slots for which pages[i] == NULL are filled w/ dummy page
  */
-int omap_dmm_pin(enum tiler_mode fmt, struct tcm_area *area,
-		struct page **pages, bool wait)
+int tiler_pin(u32 handle, struct page **pages, bool wait)
 {
-	int ret = fill(fmt, area, pages, wait);
-	if (ret) {
-		omap_dmm_unpin(fmt, area);
-		return ret;
-	}
-	return 0;
-}
+	struct iova_info *iova = (struct iova_info *)handle;
+	int i, ret;
 
-int omap_dmm_unpin(enum tiler_mode fmt, struct tcm_area *area)
-{
-	return fill(fmt, area, NULL, false);
+	for (i = 0; i < iova->num_pages; i++)
+		iova->phys_array[i] = (pages && pages[i]) ?
+				page_to_phys(pages[i]) : omap_dmm->dummy_pa;
+
+	ret = fill(&iova->area, iova->phys_array, wait);
+
+	if (ret)
+		tiler_unpin(handle);
+
+	return ret;
 }
+EXPORT_SYMBOL(tiler_pin);
+
+int tiler_unpin(u32 handle)
+{
+	struct iova_info *iova = (struct iova_info *)handle;
+	return fill(&iova->area, NULL, false);
+}
+EXPORT_SYMBOL(tiler_unpin);
 
 /*
  * Reserve/release
  */
 
-/* note: w/h/align must be slot aligned */
-struct tcm_area * omap_dmm_reserve_2d(enum tiler_mode fmt,
-		uint16_t w, uint16_t h, uint16_t align)
+u32 tiler_reserve_2d(enum tiler_mode fmt, uint16_t w, uint16_t h,
+			uint16_t align)
 {
-	struct tcm_area *area = kzalloc(sizeof(*area), GFP_KERNEL);
+	struct iova_info *iova = kzalloc(sizeof(*iova), GFP_KERNEL);
+	u32 min_align = 128;
 	int ret;
 
 	BUG_ON(!validfmt(fmt));
 
 	/* convert width/height to slots */
-	w /= geom[fmt].slot_w;
-	h /= geom[fmt].slot_h;
+	w = DIV_ROUND_UP(w, geom[fmt].slot_w);
+	h = DIV_ROUND_UP(h, geom[fmt].slot_h);
 
 	/* convert alignment to slots */
+	min_align = max(min_align, (geom[fmt].slot_w * geom[fmt].cpp));
+	align = ALIGN(align, min_align);
 	align /= geom[fmt].slot_w * geom[fmt].cpp;
 
-	ret = tcm_reserve_2d(containers[fmt], w, h, align, area);
-	if (ret) {
-		kfree(area);
-		return ERR_PTR(ret);
-	}
-	return area;
-}
+	iova->num_pages = w * h;
+	iova->phys_array = kzalloc(iova->num_pages * sizeof(*iova->phys_array),
+					GFP_KERNEL);
+	iova->fmt = fmt;
 
-/* note: size must be page aligned */
-struct tcm_area * omap_dmm_reserve_1d(size_t size)
-{
-	struct tcm_area *area = kzalloc(sizeof(*area), GFP_KERNEL);
-	int ret = tcm_reserve_1d(containers[TILFMT_8BPP],
-			size >> PAGE_SHIFT, area);
-	if (ret) {
-		kfree(area);
-		return ERR_PTR(ret);
+	if (!iova->phys_array) {
+		dev_err(omap_dmm->dev, "failed to allocate iova structure\n");
+		kfree(iova);
+		return 0;
 	}
-	return area;
+
+	dev_info(omap_dmm->dev, "+2d: w=%u, h=%u, align=%u\n", w, h, align);
+	ret = tcm_reserve_2d(containers[fmt], w, h, align, &iova->area);
+	if (ret) {
+		kfree(iova->phys_array);
+		kfree(iova);
+		return 0;
+	}
+
+	dev_info(omap_dmm->dev, "+2d: (%u,%u)-(%u,%u): %dx%d\n",
+		iova->area.p0.x, iova->area.p0.y, iova->area.p1.x,
+		iova->area.p1.y, w, h);
+
+	/* add to global iova list */
+	spin_lock(&list_lock);
+	list_add(&iova->iova_node, &iova_head);
+	spin_unlock(&list_lock);
+
+	return (u32)iova;
 }
+EXPORT_SYMBOL(tiler_reserve_2d);
+
+u32 tiler_reserve_1d(size_t size)
+{
+	struct iova_info *iova = kzalloc(sizeof(*iova), GFP_KERNEL);
+
+	if (!iova)
+		return 0;
+
+	iova->num_pages = size / PAGE_SIZE;
+	iova->phys_array = kzalloc(iova->num_pages * sizeof(*iova->phys_array),
+					GFP_KERNEL);
+	iova->fmt = TILFMT_PAGE;
+
+	if (!iova->phys_array) {
+		kfree(iova);
+		return 0;
+	}
+
+	if (tcm_reserve_1d(containers[TILFMT_PAGE], size >> PAGE_SHIFT,
+				&iova->area)) {
+		kfree(iova->phys_array);
+		kfree(iova);
+		return 0;
+	}
+
+	spin_lock(&list_lock);
+	list_add(&iova->iova_node, &iova_head);
+	spin_unlock(&list_lock);
+	
+	return (u32)iova;
+}
+EXPORT_SYMBOL(tiler_reserve_1d);
 
 /* note: if you have pin'd pages, you should have already unpin'd first! */
-int omap_dmm_release(struct tcm_area *area)
+int tiler_release(u32 handle)
 {
-	int ret = tcm_free(area);
-	if (ret) {
-		return ret;
+	struct iova_info *iova = (struct iova_info *)handle;
+	int ret = tcm_free(&iova->area);
+
+	if (iova->area.tcm)
+		dev_err(omap_dmm->dev, "failed to release iova\n");
+	spin_lock(&list_lock);
+	list_del(&iova->iova_node);
+	spin_unlock(&list_lock);
+
+	dev_info(omap_dmm->dev, "-2d: (%u,%u)-(%u,%u)\n",
+		iova->area.p0.x, iova->area.p0.y, iova->area.p1.x,
+		iova->area.p1.y);
+
+	kfree(iova->phys_array);
+	kfree(iova);
+	return ret;
+}
+EXPORT_SYMBOL(tiler_release);
+
+#ifdef CONFIG_DEBUG_FS
+/*
+ * debugfs support
+*/
+static void fill_map(char **map, int xdiv, int ydiv, struct tcm_area *a,
+							char c, bool ovw)
+{
+	int x, y;
+	for (y = a->p0.y / ydiv; y <= a->p1.y / ydiv; y++)
+		for (x = a->p0.x / xdiv; x <= a->p1.x / xdiv; x++)
+			if (map[y][x] == ' ' || ovw)
+				map[y][x] = c;
+}
+
+static void fill_map_pt(char **map, int xdiv, int ydiv, struct tcm_pt *p,
+									char c)
+{
+	map[p->y / ydiv][p->x / xdiv] = c;
+}
+
+static char read_map_pt(char **map, int xdiv, int ydiv, struct tcm_pt *p)
+{
+	return map[p->y / ydiv][p->x / xdiv];
+}
+
+static int map_width(int xdiv, int x0, int x1)
+{
+	return (x1 / xdiv) - (x0 / xdiv) + 1;
+}
+
+static void text_map(char **map, int xdiv, char *nice, int yd, int x0, int x1)
+{
+	char *p = map[yd] + (x0 / xdiv);
+	int w = (map_width(xdiv, x0, x1) - strlen(nice)) / 2;
+	if (w >= 0) {
+		p += w;
+		while (*nice)
+			*p++ = *nice++;
 	}
-	kfree(area);
+}
+
+static void map_1d_info(char **map, int xdiv, int ydiv, char *nice,
+							struct tcm_area *a)
+{
+	sprintf(nice, "%dK", tcm_sizeof(*a) * 4);
+	if (a->p0.y + 1 < a->p1.y) {
+		text_map(map, xdiv, nice, (a->p0.y + a->p1.y) / 2 / ydiv, 0,
+							256 - 1);
+	} else if (a->p0.y < a->p1.y) {
+		if (strlen(nice) < map_width(xdiv, a->p0.x, 256 - 1))
+			text_map(map, xdiv, nice, a->p0.y / ydiv,
+					a->p0.x + xdiv,	256 - 1);
+		else if (strlen(nice) < map_width(xdiv, 0, a->p1.x))
+			text_map(map, xdiv, nice, a->p1.y / ydiv,
+					0, a->p1.y - xdiv);
+	} else if (strlen(nice) + 1 < map_width(xdiv, a->p0.x, a->p1.x)) {
+		text_map(map, xdiv, nice, a->p0.y / ydiv, a->p0.x, a->p1.x);
+	}
+}
+
+static void map_2d_info(char **map, int xdiv, int ydiv, char *nice,
+							struct tcm_area *a)
+{
+	sprintf(nice, "(%d*%d)", tcm_awidth(*a), tcm_aheight(*a));
+	if (strlen(nice) + 1 < map_width(xdiv, a->p0.x, a->p1.x))
+		text_map(map, xdiv, nice, (a->p0.y + a->p1.y) / 2 / ydiv,
+							a->p0.x, a->p1.x);
+}
+
+static int tiler_debug_show(struct seq_file *s, void *unused)
+{
+	int xdiv = 2, ydiv = 1;
+	char **map = NULL, *global_map;
+	struct iova_info *iova;
+	struct tcm_area a, p;
+	int i;
+	static char *m2d = "abcdefghijklmnopqrstuvwxyz"
+			"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+	static char *a2d = ".,:;'\"`~!^-+";
+	char *m2dp = m2d, *a2dp = a2d;
+	char nice[128];
+	int h_adj = omap_dmm->lut_height / ydiv;
+	int w_adj = omap_dmm->lut_width / xdiv;
+
+	map = kzalloc(h_adj * sizeof(*map), GFP_KERNEL);
+	global_map = kzalloc((w_adj + 1) * h_adj, GFP_KERNEL);
+
+	if (!map || !global_map)
+		goto error;
+
+	memset(global_map, ' ', (w_adj + 1) * h_adj);
+	for (i = 0; i < omap_dmm->lut_height; i++) {
+		map[i] = global_map + i * (w_adj + 1);
+		map[i][w_adj] = 0;
+	}
+	spin_lock(&list_lock);
+
+	list_for_each_entry(iova, &iova_head, iova_node) {
+		if (iova->fmt != TILFMT_PAGE) {
+			fill_map(map, xdiv, ydiv, &iova->area, *m2dp, true);
+			if (!*++a2dp)
+				a2dp = a2d;
+			if (!*++m2dp)
+				m2dp = m2d;
+			map_2d_info(map, xdiv, ydiv, nice, &iova->area);
+		} else {
+			bool start = read_map_pt(map, xdiv, ydiv, &iova->area.p0)
+									== ' ';
+			bool end = read_map_pt(map, xdiv, ydiv, &iova->area.p1)
+									== ' ';
+			tcm_for_each_slice(a, iova->area, p)
+				fill_map(map, xdiv, ydiv, &a, '=', true);
+			fill_map_pt(map, xdiv, ydiv, &iova->area.p0,
+							start ? '<' : 'X');
+			fill_map_pt(map, xdiv, ydiv, &iova->area.p1,
+							end ? '>' : 'X');
+			map_1d_info(map, xdiv, ydiv, nice, &iova->area);
+		}
+	}
+
+	spin_unlock(&list_lock);
+
+	if (s) {
+		seq_printf(s, "BEGIN DMM TILER MAP\n");
+		for (i = 0; i < 128; i++) 
+			seq_printf(s, "%03d:%s\n", i, map[i]);
+		seq_printf(s, "END TILER MAP\n");
+	} else {
+		printk(KERN_INFO "BEGIN DMM TILER MAP\n");
+		for (i = 0; i < 128; i++) 
+			printk(KERN_INFO "%03d:%s\n", i, map[i]);
+		printk(KERN_INFO "END TILER MAP\n");
+	}
+
+error:
+	kfree(map);
+	kfree(global_map);
 	return 0;
 }
+
+static int tiler_debug_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, tiler_debug_show, NULL);
+}
+
+static const struct file_operations tiler_debug_fops = {
+	.open		= tiler_debug_open,
+	.read		= seq_read,
+	.llseek 	= seq_lseek,
+	.release 	= single_release,
+};
+#endif
+
+void tiler_print_allocations(void)
+{
+	tiler_debug_show(NULL, NULL);
+}
+EXPORT_SYMBOL(tiler_print_allocations);
 
 /*
  *  driver functions
@@ -409,6 +618,10 @@ static int omap_dmm_iommu_remove(struct platform_device *pdev)
 			free_irq(dmm->irq, dmm);
 
 		platform_set_drvdata(pdev, NULL);
+
+#ifdef CONFIG_DEBUG_FS
+		debugfs_remove_recursive(dmm->dfs_root);
+#endif
 		kfree(dmm);
 	}
 
@@ -529,13 +742,22 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 	containers[TILFMT_32BPP] = omap_dmm->tcm[0];
 	containers[TILFMT_PAGE] = omap_dmm->tcm[0];
 
+#ifdef CONFIG_DEBUG_FS
+	omap_dmm->dfs_root = debugfs_create_dir("dmm_tiler", NULL);
+	if (IS_ERR_OR_NULL(omap_dmm->dfs_root))
+		dev_warn(&pdev->dev, "failed to create debug files\n");
+	else
+		omap_dmm->dfs_map = debugfs_create_file("map", S_IRUGO,
+				omap_dmm->dfs_root, NULL, &tiler_debug_fops);
+#endif
+
 	area = (struct tcm_area ) {
 			.is2d = true,
 			.tcm = containers[TILFMT_8BPP],
 			.p1.x = omap_dmm->lut_width - 1,
 			.p1.y = omap_dmm->lut_height - 1,
 		};
-	omap_dmm_unpin(TILFMT_8BPP, &area);
+	fill(&area, NULL, true);
 
 	return 0;
 

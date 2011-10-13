@@ -145,6 +145,37 @@ struct refill_engine {
 	struct mutex mtx;
 };
 
+struct dmm {
+	struct device *dev;
+	void __iomem *base;
+	int irq;
+
+	struct page *dummy_page;
+	dma_addr_t dummy_pa;
+
+	void *refill_va;
+	dma_addr_t refill_pa;
+
+	/* refill engines */
+	struct  refill_engine *engines;
+	int num_engines;
+
+	/* container information */
+	int lut_width;
+	int lut_height;
+	int num_lut;
+
+	/* array of LUT - TCM containers */
+	struct tcm **tcm;
+
+	/* debugfs entries */
+#ifdef CONFIG_DEBUG_FS
+	struct dentry *dfs_root;
+	struct dentry *dfs_map;
+#endif
+	
+};
+
 #if 0
 struct dmm_txn * dmm_txn_init(struct dmm *dmm);
 

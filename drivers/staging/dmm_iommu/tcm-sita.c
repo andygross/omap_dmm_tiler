@@ -18,6 +18,7 @@
  *
  */
 #include <linux/slab.h>
+#include <linux/spinlock.h>
 
 #include "_tcm-sita.h"
 #include "tcm-sita.h"
@@ -121,7 +122,7 @@ struct tcm *sita_init(u16 width, u16 height, struct tcm_pt *attr)
 	tcm->deinit = sita_deinit;
 	tcm->pvt = (void *)pvt;
 
-	mutex_init(&(pvt->mtx));
+	spin_lock_init(&(pvt->lock));
 
 	/* Creating tam map */
 	pvt->map = kmalloc(sizeof(*pvt->map) * tcm->width, GFP_KERNEL);
@@ -151,10 +152,10 @@ struct tcm *sita_init(u16 width, u16 height, struct tcm_pt *attr)
 		pvt->div_pt.y = (tcm->height * 3) / 4;
 	}
 
-	mutex_lock(&(pvt->mtx));
+	spin_lock(&(pvt->lock));
 	assign(&area, 0, 0, width - 1, height - 1);
 	fill_area(tcm, &area, NULL);
-	mutex_unlock(&(pvt->mtx));
+	spin_unlock(&(pvt->lock));
 	return tcm;
 
 error:
@@ -172,11 +173,9 @@ static void sita_deinit(struct tcm *tcm)
 	area.p1.x = tcm->width - 1;
 	area.p1.y = tcm->height - 1;
 
-	mutex_lock(&(pvt->mtx));
+	spin_lock(&(pvt->lock));
 	fill_area(tcm, &area, NULL);
-	mutex_unlock(&(pvt->mtx));
-
-	mutex_destroy(&(pvt->mtx));
+	spin_unlock(&(pvt->lock));
 
 	for (i = 0; i < tcm->height; i++)
 		kfree(pvt->map[i]);
@@ -200,7 +199,7 @@ static s32 sita_reserve_1d(struct tcm *tcm, u32 num_slots,
 	struct tcm_area field = {0};
 	struct sita_pvt *pvt = (struct sita_pvt *)tcm->pvt;
 
-	mutex_lock(&(pvt->mtx));
+	spin_lock(&(pvt->lock));
 #ifdef RESTRICT_1D
 	/* scan within predefined 1D boundary */
 	assign(&field, tcm->width - 1, tcm->height - 1, 0, pvt->div_pt.y);
@@ -213,7 +212,7 @@ static s32 sita_reserve_1d(struct tcm *tcm, u32 num_slots,
 		/* update map */
 		fill_area(tcm, area, area);
 
-	mutex_unlock(&(pvt->mtx));
+	spin_unlock(&(pvt->lock));
 	return ret;
 }
 
@@ -240,13 +239,13 @@ static s32 sita_reserve_2d(struct tcm *tcm, u16 h, u16 w, u8 align,
 	/* we prefer 1, 32 and 64 as alignment */
 	align = align <= 1 ? 1 : align <= 32 ? 32 : 64;
 
-	mutex_lock(&(pvt->mtx));
+	spin_lock(&(pvt->lock));
 	ret = scan_areas_and_find_fit(tcm, w, h, align, area);
 	if (!ret)
 		/* update map */
 		fill_area(tcm, area, area);
 
-	mutex_unlock(&(pvt->mtx));
+	spin_unlock(&(pvt->lock));
 	return ret;
 }
 
@@ -259,7 +258,7 @@ static s32 sita_free(struct tcm *tcm, struct tcm_area *area)
 {
 	struct sita_pvt *pvt = (struct sita_pvt *)tcm->pvt;
 
-	mutex_lock(&(pvt->mtx));
+	spin_lock(&(pvt->lock));
 
 	/* check that this is in fact an existing area */
 	WARN_ON(pvt->map[area->p0.x][area->p0.y] != area ||
@@ -268,7 +267,7 @@ static s32 sita_free(struct tcm *tcm, struct tcm_area *area)
 	/* Clear the contents of the associated tiles in the map */
 	fill_area(tcm, area, NULL);
 
-	mutex_unlock(&(pvt->mtx));
+	spin_unlock(&(pvt->lock));
 
 	return 0;
 }

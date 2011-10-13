@@ -9,3 +9,5 @@ config OMAP_DMM_IOMMU
 	  1D or 2D IOVA address space and pinning and unpinning of memory
 
 	  If unsure, say N here.
+
+source "drivers/staging/dmm_iommu/test/Kconfig"

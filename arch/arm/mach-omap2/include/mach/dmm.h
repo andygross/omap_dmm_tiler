@@ -48,26 +48,27 @@ struct omap_dmm_platform_data {
 
 void omap_dmm_init(void);
 
-struct tcm_area;
+/* domain */
+u32 omap_dmm_domain_init(void);
+void omap_dmm_domain_destroy(u32 handle);
 
 /* pin/unpin */
-int omap_dmm_pin(enum tiler_mode fmt, struct tcm_area *area,
-                struct page **pages, bool wait);
-int omap_dmm_unpin(enum tiler_mode fmt, struct tcm_area *area);
+int tiler_pin(u32 handle, struct page **pages, bool wait);
+int tiler_unpin(u32 handle);
 
 /* reserve/release */
-struct tcm_area * omap_dmm_reserve_2d(enum tiler_mode fmt,
+u32 tiler_reserve_2d(enum tiler_mode fmt,
                 uint16_t w, uint16_t h, uint16_t align);
-struct tcm_area * omap_dmm_reserve_1d(size_t size);
-int omap_dmm_release(struct tcm_area *area);
+u32 tiler_reserve_1d(size_t size);
+int tiler_release(u32 handle);
 
 /* utilities */
-dma_addr_t omap_dmm_ssptr(enum tiler_mode fmt, struct tcm_area *area);
+dma_addr_t omap_dmm_ssptr(u32 handle);
 uint32_t omap_dmm_stride(enum tiler_mode fmt);
 void omap_dmm_align(enum tiler_mode fmt, uint16_t *w, uint16_t *h);
 size_t omap_dmm_size(enum tiler_mode fmt, uint16_t w, uint16_t h);
 size_t omap_dmm_vsize(enum tiler_mode fmt, uint16_t w, uint16_t h);
-
+void tiler_print_allocations(void);
 static inline bool validfmt(enum tiler_mode fmt)
 {
         switch (fmt) {

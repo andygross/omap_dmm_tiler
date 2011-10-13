@@ -1,3 +1,4 @@
+obj-y := test/
 ccflags-y := -Werror
 omap_dmm-y := omap_dmm_iommu.o tcm-sita.o
 

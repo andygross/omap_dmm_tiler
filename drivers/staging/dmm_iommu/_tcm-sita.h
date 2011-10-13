@@ -77,7 +77,7 @@ struct score {
 };
 
 struct sita_pvt {
-	struct mutex mtx;
+	spinlock_t lock;	/* spinlock to protect access */
 	struct tcm_pt div_pt;	/* divider point splitting container */
 	struct tcm_area ***map;	/* pointers to the parent area for each slot */
 };
