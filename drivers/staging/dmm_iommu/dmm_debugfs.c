@@ -16,31 +16,21 @@
 #include <linux/module.h>
 #include <linux/platform_device.h> /* platform_device() */
 #include <linux/errno.h>
-#include <linux/sched.h>
-#include <linux/wait.h>
-#include <linux/interrupt.h>
-#include <linux/dma-mapping.h>
 #include <linux/slab.h>
-#include <linux/delay.h>
-#include <linux/mm.h>
-#include <linux/delay.h>
-#include <linux/time.h>
 #include <linux/list.h>
 #include <linux/debugfs.h>
+#include <linux/seq_file.h>
 
 #include "tcm.h"
-#include "tcm-sita.h"
+#include "omap_dmm_priv.h"
 
+static struct dentry *dfs_root;
+static struct dentry *dfs_map;
 
 /*
  *  Debugfs support
  *  ==========================================================================
  */
-struct tiler_debugfs_data {
-	char name[17];
-	void (*func)(struct seq_file *, u32 arg);
-	u32 arg;
-};
 
 static void fill_map(char **map, int xdiv, int ydiv, struct tcm_area *a,
 							char c, bool ovw)
@@ -85,11 +75,11 @@ static void map_1d_info(char **map, int xdiv, int ydiv, char *nice,
 	sprintf(nice, "%dK", tcm_sizeof(*a) * 4);
 	if (a->p0.y + 1 < a->p1.y) {
 		text_map(map, xdiv, nice, (a->p0.y + a->p1.y) / 2 / ydiv, 0,
-							tiler.width - 1);
+							256 - 1);
 	} else if (a->p0.y < a->p1.y) {
-		if (strlen(nice) < map_width(xdiv, a->p0.x, tiler.width - 1))
+		if (strlen(nice) < map_width(xdiv, a->p0.x, 256 - 1))
 			text_map(map, xdiv, nice, a->p0.y / ydiv,
-					a->p0.x + xdiv,	tiler.width - 1);
+					a->p0.x + xdiv,	256 - 1);
 		else if (strlen(nice) < map_width(xdiv, 0, a->p1.x))
 			text_map(map, xdiv, nice, a->p1.y / ydiv,
 					0, a->p1.y - xdiv);
@@ -107,101 +97,108 @@ static void map_2d_info(char **map, int xdiv, int ydiv, char *nice,
 							a->p0.x, a->p1.x);
 }
 
-static void debug_allocation_map(struct seq_file *s, u32 arg)
+int tiler_debug_show(struct seq_file *s, void *arg)
 {
-	int xdiv = (arg >> 8) & 0xFF;
-	int ydiv = arg & 0xFF;
-	int i;
-	char **map, *global_map;
-	struct area_info *ai;
-	struct mem_info *mi;
+	struct dmm *omap_dmm = (struct dmm *)arg;
+	int xdiv = 2, ydiv = 1;
+	char **map = NULL, *global_map;
+	struct tiler_block *block;
 	struct tcm_area a, p;
+	int i;
 	static char *m2d = "abcdefghijklmnopqrstuvwxyz"
-					"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+			"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 	static char *a2d = ".,:;'\"`~!^-+";
 	char *m2dp = m2d, *a2dp = a2d;
 	char nice[128];
+	int h_adj = omap_dmm->lut_height / ydiv;
+	int w_adj = omap_dmm->lut_width / xdiv;
 
-	/* allocate map */
-	map = kzalloc(tiler.height / ydiv * sizeof(*map), GFP_KERNEL);
-	global_map = kzalloc((tiler.width / xdiv + 1) * tiler.height / ydiv,
-								GFP_KERNEL);
-	if (!map || !global_map) {
-		printk(KERN_ERR "could not allocate map for debug print\n");
+	map = kzalloc(h_adj * sizeof(*map), GFP_KERNEL);
+	global_map = kzalloc((w_adj + 1) * h_adj, GFP_KERNEL);
+
+	if (!map || !global_map)
 		goto error;
-	}
-	memset(global_map, ' ', (tiler.width / xdiv + 1) * tiler.height / ydiv);
-	for (i = 0; i < tiler.height / ydiv; i++) {
-		map[i] = global_map + i * (tiler.width / xdiv + 1);
-		map[i][tiler.width / xdiv] = 0;
-	}
 
-	/* get all allocations */
-	mutex_lock(&mtx);
+	memset(global_map, ' ', (w_adj + 1) * h_adj);
+	for (i = 0; i < omap_dmm->lut_height; i++) {
+		map[i] = global_map + i * (w_adj + 1);
+		map[i][w_adj] = 0;
+	}
+	spin_lock(&omap_dmm->list_lock);
 
-	list_for_each_entry(mi, &blocks, global) {
-		if (mi->area.is2d) {
-			ai = mi->parent;
-			fill_map(map, xdiv, ydiv, &ai->area, *a2dp, false);
-			fill_map(map, xdiv, ydiv, &mi->area, *m2dp, true);
+	list_for_each_entry(block, &omap_dmm->alloc_head, alloc_node) {
+		if (block->fmt != TILFMT_PAGE) {
+			fill_map(map, xdiv, ydiv, &block->area, *m2dp, true);
 			if (!*++a2dp)
 				a2dp = a2d;
 			if (!*++m2dp)
 				m2dp = m2d;
-			map_2d_info(map, xdiv, ydiv, nice, &mi->area);
+			map_2d_info(map, xdiv, ydiv, nice, &block->area);
 		} else {
-			bool start = read_map_pt(map, xdiv, ydiv, &mi->area.p0)
+			bool start = read_map_pt(map, xdiv, ydiv,
+							&block->area.p0)
 									== ' ';
-			bool end = read_map_pt(map, xdiv, ydiv, &mi->area.p1)
+			bool end = read_map_pt(map, xdiv, ydiv, &block->area.p1)
 									== ' ';
-			tcm_for_each_slice(a, mi->area, p)
+			tcm_for_each_slice(a, block->area, p)
 				fill_map(map, xdiv, ydiv, &a, '=', true);
-			fill_map_pt(map, xdiv, ydiv, &mi->area.p0,
+			fill_map_pt(map, xdiv, ydiv, &block->area.p0,
 							start ? '<' : 'X');
-			fill_map_pt(map, xdiv, ydiv, &mi->area.p1,
+			fill_map_pt(map, xdiv, ydiv, &block->area.p1,
 							end ? '>' : 'X');
-			map_1d_info(map, xdiv, ydiv, nice, &mi->area);
+			map_1d_info(map, xdiv, ydiv, nice, &block->area);
 		}
 	}
 
-	seq_printf(s, "BEGIN TILER MAP\n");
-	for (i = 0; i < tiler.height / ydiv; i++)
-		seq_printf(s, "%03d:%s\n", i * ydiv, map[i]);
-	seq_printf(s, "END TILER MAP\n");
+	spin_unlock(&omap_dmm->list_lock);
 
-	mutex_unlock(&mtx);
+	if (s) {
+		seq_printf(s, "BEGIN DMM TILER MAP\n");
+		for (i = 0; i < 128; i++) 
+			seq_printf(s, "%03d:%s\n", i, map[i]);
+		seq_printf(s, "END TILER MAP\n");
+	} else {
+		printk(KERN_INFO "BEGIN DMM TILER MAP\n");
+		for (i = 0; i < 128; i++) 
+			printk(KERN_INFO "%03d:%s\n", i, map[i]);
+		printk(KERN_INFO "END TILER MAP\n");
+	}
 
 error:
 	kfree(map);
 	kfree(global_map);
-}
-
-const struct tiler_debugfs_data debugfs_maps[] = {
-	{ "1x1", debug_allocation_map, 0x0101 },
-	{ "2x1", debug_allocation_map, 0x0201 },
-	{ "4x1", debug_allocation_map, 0x0401 },
-	{ "2x2", debug_allocation_map, 0x0202 },
-	{ "4x2", debug_allocation_map, 0x0402 },
-	{ "4x4", debug_allocation_map, 0x0404 },
-};
-
-static int tiler_debug_show(struct seq_file *s, void *unused)
-{
-	struct tiler_debugfs_data *fn = s->private;
-	fn->func(s, fn->arg);
 	return 0;
 }
 
 static int tiler_debug_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, tiler_debug_show, inode->i_private);
+	return single_open(file, tiler_debug_show, file->private_data);
 }
 
 static const struct file_operations tiler_debug_fops = {
-	.open           = tiler_debug_open,
-	.read           = seq_read,
-	.llseek         = seq_lseek,
-	.release        = single_release,
+	.open		= tiler_debug_open,
+	.read		= seq_read,
+	.llseek 	= seq_lseek,
+	.release 	= single_release,
 };
 
+void dmm_debugfs_create(struct dmm *omap_dmm)
+{
 
+	dfs_root = debugfs_create_dir("dmm_tiler", NULL);
+	if (IS_ERR_OR_NULL(dfs_root))
+		dev_warn(omap_dmm->dev, "failed to create debug files\n");
+	else {
+		dfs_map = debugfs_create_file("map", S_IRUGO,
+				dfs_root, omap_dmm, &tiler_debug_fops);
+		debugfs_create_bool("alloc_debug", S_IRUGO | S_IWUSR, dfs_root,
+					(u32*)&omap_dmm->alloc_debug);
+	}
+
+}
+
+void dmm_debugfs_remove(void)
+{
+	if (dfs_root)
+		debugfs_remove_recursive(dfs_root);
+}

@@ -88,24 +88,8 @@ struct tcm {
  *
  */
 
-/**
- * Template for <ALGO_NAME>_tcm_init method.  Define as:
- * TCM_INIT(<ALGO_NAME>_tcm_init)
- *
- * Allocates and initializes a tiler container manager.
- *
- * @param width		Width of container
- * @param height	Height of container
- * @param attr		Container manager specific configuration
- *			arguments.  Please describe these in
- *			your header file.
- *
- * @return Pointer to the allocated and initialized container
- *	   manager.  NULL on failure.  DO NOT leak any memory on
- *	   failure!
- */
-#define TCM_INIT(name, attr_t) \
-struct tcm *name(u16 width, u16 height, typeof(attr_t) *attr);
+struct tcm *sita_init(u16 width, u16 height, struct tcm_pt *attr);
+
 
 /**
  * Deinitialize tiler container manager.

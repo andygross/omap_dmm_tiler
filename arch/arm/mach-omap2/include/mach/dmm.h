@@ -48,22 +48,20 @@ struct omap_dmm_platform_data {
 
 void omap_dmm_init(void);
 
-/* domain */
-u32 omap_dmm_domain_init(void);
-void omap_dmm_domain_destroy(u32 handle);
+typedef struct tiler_block *tiler_handle_t;
 
 /* pin/unpin */
-int tiler_pin(u32 handle, struct page **pages, bool wait);
-int tiler_unpin(u32 handle);
+int tiler_pin(tiler_handle_t handle, struct page **pages, bool wait);
+int tiler_unpin(tiler_handle_t handle);
 
 /* reserve/release */
-u32 tiler_reserve_2d(enum tiler_mode fmt,
+tiler_handle_t tiler_reserve_2d(enum tiler_mode fmt,
                 uint16_t w, uint16_t h, uint16_t align);
-u32 tiler_reserve_1d(size_t size);
-int tiler_release(u32 handle);
+tiler_handle_t tiler_reserve_1d(size_t size);
+int tiler_release(tiler_handle_t handle);
 
 /* utilities */
-dma_addr_t omap_dmm_ssptr(u32 handle);
+dma_addr_t omap_dmm_ssptr(tiler_handle_t handle);
 uint32_t omap_dmm_stride(enum tiler_mode fmt);
 void omap_dmm_align(enum tiler_mode fmt, uint16_t *w, uint16_t *h);
 size_t omap_dmm_size(enum tiler_mode fmt, uint16_t w, uint16_t h);

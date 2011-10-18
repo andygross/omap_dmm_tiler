@@ -20,24 +20,15 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 
-#include "_tcm-sita.h"
 #include "tcm-sita.h"
 
-#define TCM_ALG_NAME "tcm_sita"
 #include "tcm-utils.h"
-
-#define X_SCAN_LIMITER	1
-#define Y_SCAN_LIMITER	1
 
 #define ALIGN_DOWN(value, align) ((value) & ~((align) - 1))
 
 /* Individual selection criteria for different scan areas */
 static s32 CR_L2R_T2B = CR_BIAS_HORIZONTAL;
 static s32 CR_R2L_T2B = CR_DIAGONAL_BALANCE;
-#ifdef SCAN_BOTTOM_UP
-static s32 CR_R2L_B2T = CR_FIRST_FOUND;
-static s32 CR_L2R_B2T = CR_DIAGONAL_BALANCE;
-#endif
 
 /*********************************************
  *	TCM API - Sita Implementation
@@ -60,13 +51,6 @@ static s32 scan_l2r_t2b(struct tcm *tcm, u16 w, u16 h, u16 align,
 static s32 scan_r2l_t2b(struct tcm *tcm, u16 w, u16 h, u16 align,
 			struct tcm_area *field, struct tcm_area *area);
 
-#ifdef SCAN_BOTTOM_UP
-static s32 scan_l2r_b2t(struct tcm *tcm, u16 w, u16 h, u16 align,
-			struct tcm_area *field, struct tcm_area *area);
-
-static s32 scan_r2l_b2t(struct tcm *tcm, u16 w, u16 h, u16 align,
-			struct tcm_area *field, struct tcm_area *area);
-#endif
 static s32 scan_r2l_b2t_one_dim(struct tcm *tcm, u32 num_slots,
 			struct tcm_area *field, struct tcm_area *area);
 
@@ -200,13 +184,10 @@ static s32 sita_reserve_1d(struct tcm *tcm, u32 num_slots,
 	struct sita_pvt *pvt = (struct sita_pvt *)tcm->pvt;
 
 	spin_lock(&(pvt->lock));
-#ifdef RESTRICT_1D
-	/* scan within predefined 1D boundary */
-	assign(&field, tcm->width - 1, tcm->height - 1, 0, pvt->div_pt.y);
-#else
+
 	/* Scanning entire container */
 	assign(&field, tcm->width - 1, tcm->height - 1, 0, 0);
-#endif
+
 	ret = scan_r2l_b2t_one_dim(tcm, num_slots, &field, area);
 	if (!ret)
 		/* update map */
@@ -300,8 +281,6 @@ static s32 scan_r2l_t2b(struct tcm *tcm, u16 w, u16 h, u16 align,
 	struct tcm_area ***map = ((struct sita_pvt *)tcm->pvt)->map;
 	struct score best = {{0}, {0}, {0}, 0};
 
-	PA(2, "scan_r2l_t2b:", field);
-
 	start_x = field->p0.x;
 	end_x = field->p1.x;
 	start_y = field->p0.y;
@@ -324,13 +303,10 @@ static s32 scan_r2l_t2b(struct tcm *tcm, u16 w, u16 h, u16 align,
 	if (start_x < end_x)
 		return -ENOSPC;
 
-	P2("ali=%d x=%d..%d y=%d..%d", align, start_x, end_x, start_y, end_y);
-
 	/* scan field top-to-bottom, right-to-left */
 	for (y = start_y; y <= end_y; y++) {
 		for (x = start_x; x >= end_x; x -= align) {
 			if (is_area_free(map, x, y, w, h)) {
-				P3("found shoulder: %d,%d", x, y);
 				found_x = x;
 
 				/* update best candidate */
@@ -338,22 +314,18 @@ static s32 scan_r2l_t2b(struct tcm *tcm, u16 w, u16 h, u16 align,
 							CR_R2L_T2B, &best))
 					goto done;
 
-#ifdef X_SCAN_LIMITER
 				/* change upper x bound */
 				end_x = x + 1;
-#endif
 				break;
 			} else if (map[x][y] && map[x][y]->is2d) {
 				/* step over 2D areas */
 				x = ALIGN(map[x][y]->p0.x - w + 1, align);
-				P3("moving to: %d,%d", x, y);
 			}
 		}
-#ifdef Y_SCAN_LIMITER
+
 		/* break if you find a free area shouldering the scan field */
 		if (found_x == start_x)
 			break;
-#endif
 	}
 
 	if (!best.a.tcm)
@@ -362,93 +334,6 @@ done:
 	assign(area, best.a.p0.x, best.a.p0.y, best.a.p1.x, best.a.p1.y);
 	return 0;
 }
-
-#ifdef SCAN_BOTTOM_UP
-/**
- * Raster scan horizontally right to left from bottom to top to find a place
- * for a 2D area of given size inside a scan field.
- *
- * @param w	width of desired area
- * @param h	height of desired area
- * @param align	desired area alignment
- * @param area	pointer to the area that will be set to the best position
- * @param field	area to scan (inclusive)
- *
- * @return 0 on success, non-0 error value on failure.
- */
-static s32 scan_r2l_b2t(struct tcm *tcm, u16 w, u16 h, u16 align,
-			struct tcm_area *field, struct tcm_area *area)
-{
-	/* TODO: Should I check scan area?
-	 * Might have to take it as input during initialization
-	 */
-	s32 x, y;
-	s16 start_x, end_x, start_y, end_y, found_x = -1;
-	struct tcm_area ***map = ((struct sita_pvt *)tcm->pvt)->map;
-	struct score best = {{0}, {0}, {0}, 0};
-
-	PA(2, "scan_r2l_b2t:", field);
-
-	start_x = field->p0.x;
-	end_x = field->p1.x;
-	start_y = field->p0.y;
-	end_y = field->p1.y;
-
-	/* check scan area co-ordinates */
-	if (field->p1.x < field->p0.x ||
-	    field->p1.y < field->p0.y)
-		return -EINVAL;
-
-	/* check if allocation would fit in scan area */
-	if (w > LEN(start_x, end_x) || h > LEN(start_y, end_y))
-		return -ENOSPC;
-
-	/* adjust start_x and start_y, as allocation would not fit beyond */
-	start_x = ALIGN_DOWN(start_x - w + 1, align); /* + 1 to be inclusive */
-	start_y = start_y - h + 1;
-
-	/* check if allocation would still fit in scan area */
-	if (start_x < end_x)
-		return -ENOSPC;
-
-	P2("ali=%d x=%d..%d y=%d..%d", align, start_x, end_x, start_y, end_y);
-
-	/* scan field bottom-to-top, right-to-left */
-	for (y = start_y; y >= end_y; y--) {
-		for (x = start_x; x >= end_x; x -= align) {
-			if (is_area_free(map, x, y, w, h)) {
-				P3("found shoulder: %d,%d", x, y);
-				found_x = x;
-
-				/* update best candidate */
-				if (update_candidate(tcm, x, y, w, h, field,
-							CR_R2L_B2T, &best))
-					goto done;
-#ifdef X_SCAN_LIMITER
-				/* change upper x bound */
-				end_x = x + 1;
-#endif
-				break;
-			} else if (map[x][y] && map[x][y]->is2d) {
-				/* step over 2D areas */
-				x = ALIGN(map[x][y]->p0.x - w + 1, align);
-				P3("moving to: %d,%d", x, y);
-			}
-		}
-#ifdef Y_SCAN_LIMITER
-		/* break if you find a free area shouldering the scan field */
-		if (found_x == start_x)
-			break;
-#endif
-	}
-
-	if (!best.a.tcm)
-		return -ENOSPC;
-done:
-	assign(area, best.a.p0.x, best.a.p0.y, best.a.p1.x, best.a.p1.y);
-	return 0;
-}
-#endif
 
 /**
  * Raster scan horizontally left to right from top to bottom to find a place for
@@ -469,8 +354,6 @@ static s32 scan_l2r_t2b(struct tcm *tcm, u16 w, u16 h, u16 align,
 	s16 start_x, end_x, start_y, end_y, found_x = -1;
 	struct tcm_area ***map = ((struct sita_pvt *)tcm->pvt)->map;
 	struct score best = {{0}, {0}, {0}, 0};
-
-	PA(2, "scan_l2r_t2b:", field);
 
 	start_x = field->p0.x;
 	end_x = field->p1.x;
@@ -496,35 +379,29 @@ static s32 scan_l2r_t2b(struct tcm *tcm, u16 w, u16 h, u16 align,
 	end_x = end_x - w + 1; /* + 1 to be inclusive */
 	end_y = end_y - h + 1;
 
-	P2("ali=%d x=%d..%d y=%d..%d", align, start_x, end_x, start_y, end_y);
-
 	/* scan field top-to-bottom, left-to-right */
 	for (y = start_y; y <= end_y; y++) {
 		for (x = start_x; x <= end_x; x += align) {
 			if (is_area_free(map, x, y, w, h)) {
-				P3("found shoulder: %d,%d", x, y);
 				found_x = x;
 
 				/* update best candidate */
 				if (update_candidate(tcm, x, y, w, h, field,
 							CR_L2R_T2B, &best))
 					goto done;
-#ifdef X_SCAN_LIMITER
 				/* change upper x bound */
 				end_x = x - 1;
-#endif
+
 				break;
 			} else if (map[x][y] && map[x][y]->is2d) {
 				/* step over 2D areas */
 				x = ALIGN_DOWN(map[x][y]->p1.x, align);
-				P3("moving to: %d,%d", x, y);
 			}
 		}
-#ifdef Y_SCAN_LIMITER
+
 		/* break if you find a free area shouldering the scan field */
 		if (found_x == start_x)
 			break;
-#endif
 	}
 
 	if (!best.a.tcm)
@@ -533,93 +410,6 @@ done:
 	assign(area, best.a.p0.x, best.a.p0.y, best.a.p1.x, best.a.p1.y);
 	return 0;
 }
-
-#ifdef SCAN_BOTTOM_UP
-/**
- * Raster scan horizontally left to right from bottom to top to find a
- * place for a 2D area of given size inside a scan field.
- *
- * @param w	width of desired area
- * @param h	height of desired area
- * @param align	desired area alignment
- * @param area	pointer to the area that will be set to the best position
- * @param field	area to scan (inclusive)
- *
- * @return 0 on success, non-0 error value on failure.
- */
-static s32 scan_l2r_b2t(struct tcm *tcm, u16 w, u16 h, u16 align,
-			struct tcm_area *field, struct tcm_area *area)
-{
-	s32 x, y;
-	s16 start_x, end_x, start_y, end_y, found_x = -1;
-	struct tcm_area ***map = ((struct sita_pvt *)tcm->pvt)->map;
-	struct score best = {{0}, {0}, {0}, 0};
-
-	PA(2, "scan_l2r_b2t:", field);
-
-	start_x = field->p0.x;
-	end_x = field->p1.x;
-	start_y = field->p0.y;
-	end_y = field->p1.y;
-
-	/* check scan area co-ordinates */
-	if (field->p1.x < field->p0.x ||
-	    field->p0.y < field->p1.y)
-		return -EINVAL;
-
-	/* check if allocation would fit in scan area */
-	if (w > LEN(end_x, start_x) || h > LEN(start_y, end_y))
-		return -ENOSPC;
-
-	start_x = ALIGN(start_x, align);
-
-	/* check if allocation would still fit in scan area */
-	if (w > LEN(end_x, start_x))
-		return -ENOSPC;
-
-	/* adjust end_x and start_y, as allocation would not fit beyond */
-	end_x = end_x - w + 1; /* + 1 to be inclusive */
-	start_y = start_y - h + 1;
-
-	P2("ali=%d x=%d..%d y=%d..%d", align, start_x, end_x, start_y, end_y);
-
-	/* scan field bottom-to-top, left-to-right */
-	for (y = start_y; y >= end_y; y--) {
-		for (x = start_x; x <= end_x; x += align) {
-			if (is_area_free(map, x, y, w, h)) {
-				P3("found shoulder: %d,%d", x, y);
-				found_x = x;
-
-				/* update best candidate */
-				if (update_candidate(tcm, x, y, w, h, field,
-							CR_L2R_B2T, &best))
-					goto done;
-#ifdef X_SCAN_LIMITER
-				/* change upper x bound */
-				end_x = x - 1;
-#endif
-				break;
-			} else if (map[x][y] && map[x][y]->is2d) {
-				/* step over 2D areas */
-				x = ALIGN_DOWN(map[x][y]->p1.x, align);
-				P3("moving to: %d,%d", x, y);
-			}
-		}
-
-#ifdef Y_SCAN_LIMITER
-		/* break if you find a free area shouldering the scan field */
-		if (found_x == start_x)
-			break;
-#endif
-	}
-
-	if (!best.a.tcm)
-		return -ENOSPC;
-done:
-	assign(area, best.a.p0.x, best.a.p0.y, best.a.p1.x, best.a.p1.y);
-	return 0;
-}
-#endif
 
 /**
  * Raster scan horizontally right to left from bottom to top to find a place
@@ -644,8 +434,6 @@ static s32 scan_r2l_b2t_one_dim(struct tcm *tcm, u32 num_slots,
 	/* check scan area co-ordinates */
 	if (field->p0.y < field->p1.y)
 		return -EINVAL;
-
-	PA(2, "scan_r2l_b2t_one_dim:", field);
 
 	/**
 	 * Currently we only support full width 1D scan field, which makes sense
@@ -794,7 +582,6 @@ static void fill_area(struct tcm *tcm, struct tcm_area *area,
 	area->tcm = tcm;
 
 	tcm_for_each_slice(a, *area, a_) {
-		PA(2, "fill 2d area", &a);
 		for (x = a.p0.x; x <= a.p1.x; ++x)
 			for (y = a.p0.y; y <= a.p1.y; ++y)
 				pvt->map[x][y] = parent;
@@ -821,12 +608,11 @@ static s32 update_candidate(struct tcm *tcm, u16 x0, u16 y0, u16 w, u16 h,
 	struct score me;	/* score for area */
 
 	/*
-	 * If first found is enabled then we stop looking
 	 * NOTE: For horizontal bias we always give the first found, because our
 	 * scan is horizontal-raster-based and the first candidate will always
 	 * have the horizontal bias.
 	 */
-	bool first = criteria & (CR_FIRST_FOUND | CR_BIAS_HORIZONTAL);
+	bool first = criteria & CR_BIAS_HORIZONTAL;
 
 	assign(&me.a, x0, y0, x0 + w - 1, y0 + h - 1);
 
@@ -842,23 +628,6 @@ static s32 update_candidate(struct tcm *tcm, u16 x0, u16 y0, u16 w, u16 h,
 		goto better;
 
 	BUG_ON(first);
-
-	/* see if this are is better than the best so far */
-
-	/* neighbor check */
-	if ((criteria & CR_MAX_NEIGHS) &&
-		me.neighs > best->neighs)
-		goto better;
-
-	/* vertical bias check */
-	if ((criteria & CR_BIAS_VERTICAL) &&
-	/*
-	 * NOTE: not checking if lengths are same, because that does not
-	 * find new shoulders on the same row after a fit
-	 */
-		LEN(me.a.p0.y, field->p0.y) >
-		LEN(best->a.p0.y, field->p0.y))
-		goto better;
 
 	/* diagonal balance check */
 	if ((criteria & CR_DIAGONAL_BALANCE) &&

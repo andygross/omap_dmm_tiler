@@ -168,22 +168,21 @@ struct dmm {
 	/* array of LUT - TCM containers */
 	struct tcm **tcm;
 
-	/* debugfs entries */
-#ifdef CONFIG_DEBUG_FS
-	struct dentry *dfs_root;
-	struct dentry *dfs_map;
-#endif
-	
+	/* allocation list and lock */
+	struct list_head alloc_head;
+	spinlock_t list_lock;
+
+	/* debug interfaces */
+	bool alloc_debug;
 };
 
-#if 0
-struct dmm_txn * dmm_txn_init(struct dmm *dmm);
-
-int dmm_txn_append(struct dmm_txn *txn, struct pat_area *area,
-		struct page **pages);
-
-int dmm_txn_commit(struct dmm_txn *txn, bool wait);
-#endif
+struct tiler_block {
+	struct list_head alloc_node;	/* node for global iova list */
+	u32 *phys_array;		/* list of page physical addresses */
+	u32 num_pages;
+	struct tcm_area area;		/* area */
+	enum tiler_mode fmt;		/* format */
+};
 
 /* bits representing the same slot in DMM-TILER hw-block */
 #define SLOT_WIDTH_BITS         6
@@ -197,5 +196,11 @@ int dmm_txn_commit(struct dmm_txn *txn, bool wait);
 #define TILER_PAGE              (1 << (SLOT_WIDTH_BITS + SLOT_HEIGHT_BITS))
 #define TILER_WIDTH             (1 << (CONT_WIDTH_BITS - SLOT_WIDTH_BITS))
 #define TILER_HEIGHT            (1 << (CONT_HEIGHT_BITS - SLOT_HEIGHT_BITS))
+
+
+/* debugfs functions */
+void dmm_debugfs_create(struct dmm *omap_dmm);
+void dmm_debugfs_remove(void);
+int tiler_debug_show(struct seq_file *s, void *arg);
 
 #endif
