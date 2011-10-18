@@ -17,7 +17,7 @@
 #ifndef DMM_H
 #define DMM_H
 
-enum tiler_mode {
+enum tiler_fmt {
 	TILFMT_8BPP = 0,
 	TILFMT_16BPP,
 	TILFMT_32BPP,
@@ -55,19 +55,23 @@ int tiler_pin(tiler_handle_t handle, struct page **pages, bool wait);
 int tiler_unpin(tiler_handle_t handle);
 
 /* reserve/release */
-tiler_handle_t tiler_reserve_2d(enum tiler_mode fmt,
+tiler_handle_t tiler_reserve_2d(enum tiler_fmt fmt,
                 uint16_t w, uint16_t h, uint16_t align);
 tiler_handle_t tiler_reserve_1d(size_t size);
 int tiler_release(tiler_handle_t handle);
 
 /* utilities */
-dma_addr_t omap_dmm_ssptr(tiler_handle_t handle);
-uint32_t omap_dmm_stride(enum tiler_mode fmt);
-void omap_dmm_align(enum tiler_mode fmt, uint16_t *w, uint16_t *h);
-size_t omap_dmm_size(enum tiler_mode fmt, uint16_t w, uint16_t h);
-size_t omap_dmm_vsize(enum tiler_mode fmt, uint16_t w, uint16_t h);
+dma_addr_t tiler_ssptr(tiler_handle_t handle);
+
+uint32_t tiler_stride(enum tiler_fmt fmt);
+
+size_t tiler_size(enum tiler_fmt fmt, uint16_t w, uint16_t h);
+
+size_t tiler_vsize(enum tiler_fmt fmt, uint16_t w, uint16_t h);
+
 void tiler_print_allocations(void);
-static inline bool validfmt(enum tiler_mode fmt)
+
+static inline bool validfmt(enum tiler_fmt fmt)
 {
         switch (fmt) {
         case TILFMT_8BPP:

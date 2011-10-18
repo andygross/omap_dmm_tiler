@@ -181,7 +181,7 @@ struct tiler_block {
 	u32 *phys_array;		/* list of page physical addresses */
 	u32 num_pages;
 	struct tcm_area area;		/* area */
-	enum tiler_mode fmt;		/* format */
+	enum tiler_fmt fmt;		/* format */
 };
 
 /* bits representing the same slot in DMM-TILER hw-block */

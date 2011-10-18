@@ -312,7 +312,7 @@ EXPORT_SYMBOL(tiler_unpin);
  * Reserve/release
  */
 
-tiler_handle_t tiler_reserve_2d(enum tiler_mode fmt, uint16_t w, uint16_t h,
+tiler_handle_t tiler_reserve_2d(enum tiler_fmt fmt, uint16_t w, uint16_t h,
 			uint16_t align)
 {
 	struct tiler_block *block = kzalloc(sizeof(*block), GFP_KERNEL);
@@ -431,6 +431,96 @@ void tiler_print_allocations(void)
 	tiler_debug_show(NULL, NULL);
 }
 EXPORT_SYMBOL(tiler_print_allocations);
+
+/*
+ * Utils
+ */
+
+/* tiler space addressing bitfields */
+#define MASK_XY_FLIP		(1 << 31)
+#define MASK_Y_INVERT		(1 << 30)
+#define MASK_X_INVERT		(1 << 29)
+#define SHIFT_ACC_MODE		27
+#define MASK_ACC_MODE		3
+
+#define MASK(bits) ((1 << (bits)) - 1)
+
+#define TILVIEW_8BIT    0x60000000u
+#define TILVIEW_16BIT   (TILVIEW_8BIT  + VIEW_SIZE)
+#define TILVIEW_32BIT   (TILVIEW_16BIT + VIEW_SIZE)
+#define TILVIEW_PAGE    (TILVIEW_32BIT + VIEW_SIZE)
+#define TILVIEW_END     (TILVIEW_PAGE  + VIEW_SIZE)
+
+
+/* create tsptr by adding view orientation and access mode */
+#define TIL_ADDR(x, orient, a)\
+	((u32) (x) | (orient) | ((a) << SHIFT_ACC_MODE))
+
+/* calculate the tiler space address of a pixel in a view orientation */
+static u32 tiler_get_address(u32 orient, enum tiler_fmt fmt, u32 x, u32 y)
+{
+	u32 x_bits, y_bits, tmp, x_mask, y_mask, alignment;
+
+	x_bits = CONT_WIDTH_BITS - geom[fmt].x_shft;
+	y_bits = CONT_HEIGHT_BITS - geom[fmt].y_shft;
+	alignment = geom[fmt].x_shft + geom[fmt].y_shft;
+
+	/* validate coordinate */
+	x_mask = MASK(x_bits);
+	y_mask = MASK(y_bits);
+
+	if (x < 0 || x > x_mask || y < 0 || y > y_mask)
+		return 0;
+
+	/* account for mirroring */
+	if (orient & MASK_X_INVERT)
+		x ^= x_mask;
+	if (orient & MASK_Y_INVERT)
+		y ^= y_mask;
+
+	/* get coordinate address */
+	if (orient & MASK_XY_FLIP)
+		tmp = ((x << y_bits) + y);
+	else
+		tmp = ((y << x_bits) + x);
+
+	return TIL_ADDR((tmp << alignment), orient, fmt);
+}
+
+dma_addr_t tiler_ssptr(tiler_handle_t handle)
+{
+	struct tiler_block *block = handle;
+	BUG_ON(!validfmt(handle->fmt));
+
+	return TILVIEW_8BIT + tiler_get_address(0, block->fmt,
+			block->area.p0.x * geom[block->fmt].slot_w,
+			block->area.p0.y * geom[block->fmt].slot_h);
+}
+EXPORT_SYMBOL(tiler_ssptr);
+
+uint32_t tiler_stride(enum tiler_fmt fmt)
+{
+	BUG_ON(!validfmt(fmt));
+
+	return 1 << (CONT_WIDTH_BITS + geom[fmt].y_shft);
+}
+EXPORT_SYMBOL(tiler_stride);
+
+size_t tiler_size(enum tiler_fmt fmt, uint16_t w, uint16_t h)
+{
+	BUG_ON(!validfmt(fmt));
+	w = round_up(w, geom[fmt].slot_w);
+	h = round_up(h, geom[fmt].slot_h);
+	return geom[fmt].cpp * w * h;
+}
+EXPORT_SYMBOL(tiler_size);
+
+size_t tiler_vsize(enum tiler_fmt fmt, uint16_t w, uint16_t h)
+{
+	BUG_ON(!validfmt(fmt));
+	return round_up(geom[fmt].cpp * w, PAGE_SIZE) * h;
+}
+EXPORT_SYMBOL(tiler_vsize);
 
 /*
  *  driver functions
