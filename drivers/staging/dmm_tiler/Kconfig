@@ -12,4 +12,4 @@ config OMAP_DMM_TILER
 
 	  If unsure, say N here.
 
-source "drivers/staging/dmm_iommu/test/Kconfig"
+source "drivers/staging/dmm_tiler/test/Kconfig"

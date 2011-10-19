@@ -150,6 +150,6 @@ source "drivers/staging/mei/Kconfig"
 
 source "drivers/staging/nvec/Kconfig"
 
-source "drivers/staging/dmm_iommu/Kconfig"
+source "drivers/staging/dmm_tiler/Kconfig"
 
 endif # STAGING

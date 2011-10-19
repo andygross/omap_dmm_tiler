@@ -22,7 +22,7 @@
 #include <linux/seq_file.h>
 
 #include "tcm.h"
-#include "omap_dmm_priv.h"
+#include "omap_dmm_tiler.h"
 
 static struct dentry *dfs_root;
 static struct dentry *dfs_map;

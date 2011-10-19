@@ -29,7 +29,7 @@
 #include <linux/seq_file.h>
 
 #include "tcm.h"
-#include "omap_dmm_priv.h"
+#include "omap_dmm_tiler.h"
 
 /* mappings for associating views to luts */
 static struct tcm *containers[TILFMT_NFORMATS];
@@ -43,6 +43,7 @@ static struct dmm *omap_dmm;
 		.slot_w = 1 << (SLOT_WIDTH_BITS - (xshift)), \
 		.slot_h = 1 << (SLOT_HEIGHT_BITS - (yshift)), \
 	}
+
 static const struct {
 	uint32_t x_shft;	/* unused X-bits (as part of bpp) */
 	uint32_t y_shft;	/* unused Y-bits (as part of bpp) */
