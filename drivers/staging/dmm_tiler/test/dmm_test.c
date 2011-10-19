@@ -14,7 +14,7 @@
 #include <linux/list.h>
 
 #include <mach/dmm.h>
-static u32 handle[5];
+static tiler_handle_t handle[5];
 
 static struct platform_driver dmm_test_driver = {
 	.driver = {

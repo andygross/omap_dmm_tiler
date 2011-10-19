@@ -1,6 +1,6 @@
 config OMAP_DMM_TEST
         tristate "OMAP DMM TEST module"
-        depends on ARCH_OMAP4
+        depends on OMAP_DMM_IOMMU
         default n
         help
           Test module for OMAP dmm driver.

@@ -428,33 +428,13 @@ EXPORT_SYMBOL(tiler_release);
 
 void tiler_print_allocations(void)
 {
-	tiler_debug_show(NULL, NULL);
+	print_allocation_map(NULL, omap_dmm);
 }
 EXPORT_SYMBOL(tiler_print_allocations);
 
 /*
  * Utils
  */
-
-/* tiler space addressing bitfields */
-#define MASK_XY_FLIP		(1 << 31)
-#define MASK_Y_INVERT		(1 << 30)
-#define MASK_X_INVERT		(1 << 29)
-#define SHIFT_ACC_MODE		27
-#define MASK_ACC_MODE		3
-
-#define MASK(bits) ((1 << (bits)) - 1)
-
-#define TILVIEW_8BIT    0x60000000u
-#define TILVIEW_16BIT   (TILVIEW_8BIT  + VIEW_SIZE)
-#define TILVIEW_32BIT   (TILVIEW_16BIT + VIEW_SIZE)
-#define TILVIEW_PAGE    (TILVIEW_32BIT + VIEW_SIZE)
-#define TILVIEW_END     (TILVIEW_PAGE  + VIEW_SIZE)
-
-
-/* create tsptr by adding view orientation and access mode */
-#define TIL_ADDR(x, orient, a)\
-	((u32) (x) | (orient) | ((a) << SHIFT_ACC_MODE))
 
 /* calculate the tiler space address of a pixel in a view orientation */
 static u32 tiler_get_address(u32 orient, enum tiler_fmt fmt, u32 x, u32 y)
@@ -687,6 +667,7 @@ static int omap_dmm_iommu_probe(struct platform_device *pdev)
 	spin_lock_init(&omap_dmm->list_lock);
 
 #ifdef CONFIG_DEBUG_FS
+	dev_info(omap_dmm->dev, "init debugs\n");
 	dmm_debugfs_create(omap_dmm);
 #endif
 

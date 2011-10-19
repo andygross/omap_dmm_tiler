@@ -27,6 +27,10 @@
 static struct dentry *dfs_root;
 static struct dentry *dfs_map;
 
+static const char *alphabet = "abcdefghijklmnopqrstuvwxyz"
+			"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; 
+static const char *special = ".,:;'\"`~!^-+";
+ 
 /*
  *  Debugfs support
  *  ==========================================================================
@@ -97,18 +101,22 @@ static void map_2d_info(char **map, int xdiv, int ydiv, char *nice,
 							a->p0.x, a->p1.x);
 }
 
-int tiler_debug_show(struct seq_file *s, void *arg)
+static int tiler_debug_show(struct seq_file *s, void *arg)
 {
-	struct dmm *omap_dmm = (struct dmm *)arg;
+	print_allocation_map(s, s->private);
+	return 0;
+}
+
+void print_allocation_map(struct seq_file *s, struct dmm *omap_dmm)
+{
 	int xdiv = 2, ydiv = 1;
 	char **map = NULL, *global_map;
 	struct tiler_block *block;
 	struct tcm_area a, p;
 	int i;
-	static char *m2d = "abcdefghijklmnopqrstuvwxyz"
-			"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-	static char *a2d = ".,:;'\"`~!^-+";
-	char *m2dp = m2d, *a2dp = a2d;
+	const char *m2d = alphabet;
+	const char *a2d = special;
+	const char *m2dp = m2d, *a2dp = a2d;
 	char nice[128];
 	int h_adj = omap_dmm->lut_height / ydiv;
 	int w_adj = omap_dmm->lut_width / xdiv;
@@ -167,12 +175,12 @@ int tiler_debug_show(struct seq_file *s, void *arg)
 error:
 	kfree(map);
 	kfree(global_map);
-	return 0;
 }
 
 static int tiler_debug_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, tiler_debug_show, file->private_data);
+	printk(KERN_ERR "debug_open - %p\n", inode->i_private);
+	return single_open(file, tiler_debug_show, inode->i_private);
 }
 
 static const struct file_operations tiler_debug_fops = {
@@ -185,12 +193,14 @@ static const struct file_operations tiler_debug_fops = {
 void dmm_debugfs_create(struct dmm *omap_dmm)
 {
 
+	dev_info(omap_dmm->dev, "debugfs init - %p\n", omap_dmm);
 	dfs_root = debugfs_create_dir("dmm_tiler", NULL);
 	if (IS_ERR_OR_NULL(dfs_root))
 		dev_warn(omap_dmm->dev, "failed to create debug files\n");
 	else {
 		dfs_map = debugfs_create_file("map", S_IRUGO,
 				dfs_root, omap_dmm, &tiler_debug_fops);
+
 		debugfs_create_bool("alloc_debug", S_IRUGO | S_IWUSR, dfs_root,
 					(u32*)&omap_dmm->alloc_debug);
 	}
