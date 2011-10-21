@@ -27,6 +27,7 @@
 #include <linux/time.h>
 #include <linux/list.h>
 #include <linux/semaphore.h>
+#include <linux/pm.h>
 
 #include "tcm.h"
 #include "omap_dmm_tiler.h"
@@ -714,9 +715,40 @@ fail:
 	return ret;
 }
 
+#ifdef CONFIG_PM
+static int omap_dmm_resume(struct device *pdev)
+{
+	struct tcm_area area = {0};
+	int i;
+
+	area = (struct tcm_area) {
+		.is2d = true,
+		.tcm = containers[TILFMT_8BPP],
+		.p1.x = omap_dmm->container_width - 1,
+		.p1.y = omap_dmm->container_height - 1,
+	};
+
+	/* initialize all LUTs to dummy page entries */
+	for (i = 0; i < omap_dmm->num_lut; i++) {
+		area.tcm = omap_dmm->tcm[i];
+		if (fill(&area, NULL, true))
+			dev_err(omap_dmm->dev, "refill failed");
+	}
+
+	return 0;
+}
+
+static const struct dev_pm_ops omap_dmm_pm_ops = {
+	.resume = omap_dmm_resume,
+};
+#endif
+
 static struct platform_driver omap_dmm_driver = {
 	.driver = {
 		.name = "dmm",
+#ifdef CONFIG_PM
+		.pm = &omap_dmm_pm_ops,
+#endif
 	},
 	.probe		= omap_dmm_probe,
 	.remove		= omap_dmm_remove,
