@@ -1,0 +1,6 @@
+config OMAP_DMM_TEST
+        tristate "OMAP DMM TEST module"
+        depends on OMAP_DMM_TILER
+        default n
+        help
+          Test module for OMAP dmm driver.

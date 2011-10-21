@@ -11,3 +11,5 @@ config OMAP_DMM_TILER
 	  blocks (ISS/DSS).
 
 	  If unsure, say N here.
+
+source "drivers/staging/dmm_tiler/test/Kconfig"
