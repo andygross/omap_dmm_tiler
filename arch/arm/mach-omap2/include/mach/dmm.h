@@ -32,18 +32,21 @@ struct pat_area {
 	u32 y1:8;
 };
 
+struct omap_dmm_view_data {
+	int lut_id;
+};
+
 struct omap_dmm_platform_data {
 	const char *oh_name;
 	void __iomem *base;
 	int irq;
 
-	/* number of refill engines in DMM block */
-	int num_engines;
-
 	/* lookup table information */
 	int num_lut;
-	int lut_width;
-	int lut_height;
+	int container_width;
+	int container_height;
+	int num_view_mappings;
+	struct omap_dmm_view_data *views;
 };
 
 void omap_dmm_init(void);
