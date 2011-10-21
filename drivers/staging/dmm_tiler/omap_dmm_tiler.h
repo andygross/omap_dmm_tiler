@@ -181,6 +181,9 @@ struct dmm {
 	/* allocation list and lock */
 	struct list_head alloc_head;
 	spinlock_t list_lock;
+
+	/* debug interfaces */
+	bool alloc_debug;
 };
 
 struct tiler_block {
@@ -220,5 +223,10 @@ struct tiler_block {
 /* create tsptr by adding view orientation and access mode */
 #define TIL_ADDR(x, orient, a)\
 	((u32) (x) | (orient) | ((a) << SHIFT_ACC_MODE))
+
+/* debugfs functions */
+void dmm_debugfs_create(struct dmm *omap_dmm);
+void dmm_debugfs_remove(void);
+void print_allocation_map(void *sfile, struct dmm *omap_dmm);
 
 #endif

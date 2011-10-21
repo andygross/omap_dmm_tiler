@@ -345,6 +345,11 @@ tiler_handle_t tiler_reserve_2d(enum tiler_fmt fmt, uint16_t w, uint16_t h,
 		return 0;
 	}
 
+	if (omap_dmm->alloc_debug)
+		dev_info(omap_dmm->dev, "+2d: (%u,%u)-(%u,%u): %dx%d\n",
+			block->area.p0.x, block->area.p0.y, block->area.p1.x,
+			block->area.p1.y, w, h);
+
 	/* add to allocation list */
 	spin_lock(&omap_dmm->list_lock);
 	list_add(&block->alloc_node, &omap_dmm->alloc_head);
@@ -370,6 +375,11 @@ tiler_handle_t tiler_reserve_1d(size_t size)
 		return 0;
 	}
 
+	if (omap_dmm->alloc_debug)
+		dev_info(omap_dmm->dev, "+1d: (%u,%u)-(%u,%u): %ld\n",
+			block->area.p0.x, block->area.p0.y, block->area.p1.x,
+			block->area.p1.y, num_pages*PAGE_SIZE);
+
 	spin_lock(&omap_dmm->list_lock);
 	list_add(&block->alloc_node, &omap_dmm->alloc_head);
 	spin_unlock(&omap_dmm->list_lock);
@@ -391,6 +401,12 @@ int tiler_release(tiler_handle_t handle)
 	list_del(&block->alloc_node);
 	spin_unlock(&omap_dmm->list_lock);
 
+	if (omap_dmm->alloc_debug)
+		dev_info(omap_dmm->dev, "-%dd: (%u,%u)-(%u,%u)\n",
+			((block->fmt == TILFMT_PAGE) ? 1 : 2),
+			block->area.p0.x, block->area.p0.y, block->area.p1.x,
+			block->area.p1.y);
+
 	kfree(block);
 	return ret;
 }
@@ -398,7 +414,9 @@ EXPORT_SYMBOL(tiler_release);
 
 void tiler_print_allocations(void)
 {
+#ifdef CONFIG_DEBUG_FS
 	print_allocation_map(NULL, omap_dmm);
+#endif
 }
 EXPORT_SYMBOL(tiler_print_allocations);
 
@@ -518,6 +536,10 @@ static int omap_dmm_remove(struct platform_device *pdev)
 			free_irq(dmm->irq, dmm);
 
 		platform_set_drvdata(pdev, NULL);
+
+#ifdef CONFIG_DEBUG_FS
+		dmm_debugfs_remove();
+#endif
 
 		kfree(dmm);
 	}
@@ -663,6 +685,10 @@ static int omap_dmm_probe(struct platform_device *pdev)
 
 	INIT_LIST_HEAD(&omap_dmm->alloc_head);
 	spin_lock_init(&omap_dmm->list_lock);
+
+#ifdef CONFIG_DEBUG_FS
+	dmm_debugfs_create(omap_dmm);
+#endif
 
 	area = (struct tcm_area) {
 		.is2d = true,
