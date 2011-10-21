@@ -1,0 +1,13 @@
+# OMAP DMM IOMMU support
+config OMAP_DMM_TILER
+	tristate "OMAP DMM TILER Support"
+	depends on ARCH_OMAP4
+	default n
+	help
+	  Adds support for the DMM TILER found in OMAP4+ SoCs.  The DMM/Tiler
+	  provides the capability to create a physically contiguous address
+	  from a set of non-contiguous pages of memory.  It also provides
+          zero cost rotation for 2D mapped buffers for other OMAP hardware
+	  blocks (ISS/DSS).
+
+	  If unsure, say N here.
