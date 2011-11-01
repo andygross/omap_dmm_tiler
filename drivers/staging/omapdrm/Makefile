@@ -10,6 +10,9 @@ omapdrm-y := omap_drv.o \
 		omap_connector.o \
 		omap_fb.o \
 		omap_fbdev.o \
-		omap_gem.o
+		omap_gem.o \
+		omap_dmm_tiler.o \
+		tcm-sita.o
+omapdrm-$(CONFIG_DEBUG_FS) +=	tiler_debugfs.o
 
 obj-$(CONFIG_DRM_OMAP)	+= omapdrm.o 
