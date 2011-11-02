@@ -22,7 +22,8 @@
 #include <linux/shmem_fs.h>
 
 #include "omap_drv.h"
-#include "omap_dmm.h"
+#include "mach/dmm.h"
+#include "omap_dmm_tiler.h"
 
 /*
  * GEM buffer object implementation.
@@ -68,7 +69,7 @@ struct omap_gem_object {
 	/**
 	 * DMM area when buffer is remapped in DMM/TILER.
 	 */
-	struct tcm_area *area;
+	tiler_handle_t handle;
 
 	/**
 	 * Array of backing pages, if allocated.  Note that pages are never
@@ -129,7 +130,7 @@ struct omap_gem_object {
  */
 #define NUM_USERGART_ENTRIES 2
 struct usergart_entry {
-	struct tcm_area *area;		/* the reserved area */
+	tiler_handle_t handle;		/* the reserved area */
 	dma_addr_t paddr;
 	struct drm_gem_object *obj;	/* the current pinned obj */
 	pgoff_t obj_pgoff;		/* page offset of obj currently mapped in */
@@ -141,6 +142,22 @@ static struct {
 	int stride_pfn;			/* stride in pages */
 	int last;				/* index of last used entry */
 } *usergart;
+
+/* GEM bo flags -> tiler fmt */
+static enum tiler_fmt gem2fmt(uint32_t flags)
+{
+	switch (flags & OMAP_BO_TILED) {
+	case OMAP_BO_TILED_8:
+		return TILFMT_8BPP;
+	case OMAP_BO_TILED_16:
+		return TILFMT_16BPP;
+	case OMAP_BO_TILED_32:
+		return TILFMT_32BPP;
+	default:
+		return TILFMT_PAGE;
+	}
+}
+
 
 static void evict_entry(struct drm_gem_object *obj,
 		enum tiler_fmt fmt, struct usergart_entry *entry)
@@ -252,7 +269,7 @@ size_t omap_gem_mmap_size(struct drm_gem_object *obj)
 		 * pages, only the valid picture part.. so need to adjust for
 		 * this in the size used to mmap and generate mmap offset
 		 */
-		size = omap_dmm_vsize(gem2fmt(omap_obj->flags),
+		size = tiler_vsize(gem2fmt(omap_obj->flags),
 				omap_obj->width, omap_obj->height);
 	}
 
@@ -347,7 +364,7 @@ static int fault_2d(struct drm_gem_object *obj,
 	memset(pages + slots, 0,
 			sizeof(struct page *) * (usergart[fmt].height - slots));
 
-	ret = omap_dmm_pin(fmt, entry->area, pages, true);
+	ret = tiler_pin(entry->handle, pages, true);
 	if (ret) {
 		dev_err(obj->dev->dev, "failed to pin: %d\n", ret);
 		return ret;
@@ -579,9 +596,9 @@ int omap_gem_get_paddr(struct drm_gem_object *obj,
 		if (omap_obj->paddr_cnt == 0) {
 			struct page **pages;
 			enum tiler_fmt fmt = gem2fmt(omap_obj->flags);
-			struct tcm_area *area;
+			tiler_handle_t handle;
 
-			BUG_ON(omap_obj->area);
+			BUG_ON(omap_obj->handle);
 
 			ret = get_pages(obj, &pages);
 			if (ret) {
@@ -589,27 +606,27 @@ int omap_gem_get_paddr(struct drm_gem_object *obj,
 			}
 
 			if (omap_obj->flags & OMAP_BO_TILED) {
-				area = omap_dmm_reserve_2d(fmt,
+				handle = tiler_reserve_2d(fmt,
 						omap_obj->width, omap_obj->height, 0);
 			} else {
-				area = omap_dmm_reserve_1d(obj->size);
+				handle = tiler_reserve_1d(obj->size);
 			}
 
-			if (IS_ERR(area)) {
-				ret = PTR_ERR(area);
+			if (IS_ERR(handle)) {
+				ret = PTR_ERR(handle);
 				dev_err(obj->dev->dev, "could not remap: %d (%d)\n", ret, fmt);
 				goto fail;
 			}
 
-			ret = omap_dmm_pin(fmt, area, pages, false);
+			ret = tiler_pin(handle, pages, false);
 			if (ret) {
-				omap_dmm_release(area);
+				tiler_release(handle);
 				dev_err(obj->dev->dev, "could not pin: %d\n", ret);
 				goto fail;
 			}
 
-			omap_obj->paddr = omap_dmm_ssptr(fmt, area);
-			omap_obj->area = area;
+			omap_obj->paddr = tiler_ssptr(handle);
+			omap_obj->handle = handle;
 
 			DBG("got paddr: %08x", omap_obj->paddr);
 		}
@@ -637,16 +654,16 @@ int omap_gem_put_paddr(struct drm_gem_object *obj)
 	if (omap_obj->paddr_cnt > 0) {
 		omap_obj->paddr_cnt--;
 		if (omap_obj->paddr_cnt == 0) {
-			ret = omap_dmm_unpin(gem2fmt(omap_obj->flags), omap_obj->area);
+			ret = tiler_unpin(omap_obj->handle);
 			if (ret) {
 				dev_err(obj->dev->dev, "could not unpin pages: %d\n", ret);
 				goto fail;
 			}
-			ret = omap_dmm_release(omap_obj->area);
+			ret = tiler_release(omap_obj->handle);
 			if (ret) {
 				dev_err(obj->dev->dev, "could not release unmap: %d\n", ret);
 			}
-			omap_obj->area = NULL;
+			omap_obj->handle = NULL;
 		}
 	}
 fail:
@@ -1075,11 +1092,11 @@ struct drm_gem_object * omap_gem_new(struct drm_device *dev,
 		flags |= OMAP_BO_UNCACHED;
 
 		/* align dimensions to slot boundaries... */
-		omap_dmm_align(gem2fmt(flags),
+		tiler_align(gem2fmt(flags),
 				&gsize.tiled.width, &gsize.tiled.height);
 
 		/* ...and calculate size based on aligned dimensions */
-		size = omap_dmm_size(gem2fmt(flags),
+		size = tiler_size(gem2fmt(flags),
 				gsize.tiled.width, gsize.tiled.height);
 	} else {
 		size = PAGE_ALIGN(gsize.bytes);
@@ -1155,41 +1172,39 @@ EXPORT_SYMBOL(omap_gem_new_ext);
 void omap_gem_init(struct drm_device *dev)
 {
 	const enum tiler_fmt fmts[] = {
-			TILFMT_8BIT, TILFMT_16BIT, TILFMT_32BIT
+			TILFMT_8BPP, TILFMT_16BPP, TILFMT_32BPP
 	};
-	int i, j, ret;
+	int i, j;
 
-	ret = omap_dmm_init(dev);
-	if (ret) {
-		/* DMM is only supported on OMAP4 and later, so this isn't fatal */
-		dev_warn(dev->dev, "omap_dmm_init failed, disabling DMM\n");
-		return;
-	}
+	/* FIXME!!!!!! Check for Tiler present here  */
+
+
+
 
 	usergart = kzalloc(3 * sizeof(*usergart), GFP_KERNEL);
 
 	/* reserve 4k aligned/wide regions for userspace mappings: */
 	for (i = 0; i < ARRAY_SIZE(fmts); i++) {
 		uint16_t h = 1, w = PAGE_SIZE >> i;
-		omap_dmm_align(fmts[i], &w, &h);
+		tiler_align(fmts[i], &w, &h);
 		/* note: since each region is 1 4kb page wide, and minimum
 		 * number of rows, the height ends up being the same as the
 		 * # of pages in the region
 		 */
 		usergart[i].height = h;
-		usergart[i].stride_pfn = omap_dmm_stride(fmts[i]) >> PAGE_SHIFT;
+		usergart[i].stride_pfn = tiler_stride(fmts[i]) >> PAGE_SHIFT;
 		usergart[i].slot_width = (PAGE_SIZE / h) >> i;
 		for (j = 0; j < NUM_USERGART_ENTRIES; j++) {
 			struct usergart_entry *entry = &usergart[i].entry[j];
-			struct tcm_area *area =
-					omap_dmm_reserve_2d(fmts[i], w, h, PAGE_SIZE);
-			if (IS_ERR(area)) {
+			tiler_handle_t handle =
+					tiler_reserve_2d(fmts[i], w, h, PAGE_SIZE);
+			if (IS_ERR(handle)) {
 				dev_err(dev->dev, "reserve failed: %d, %d, %ld\n",
-						i, j, PTR_ERR(area));
+						i, j, PTR_ERR(handle));
 				return;
 			}
-			entry->paddr = omap_dmm_ssptr(fmts[i], area);
-			entry->area = area;
+			entry->paddr = tiler_ssptr(handle);
+			entry->handle = handle;
 
 			DBG("%d:%d: %dx%d: paddr=%08x stride=%d", i, j, w, h,
 					entry->paddr, usergart[i].stride_pfn << PAGE_SHIFT);
@@ -1199,6 +1214,5 @@ void omap_gem_init(struct drm_device *dev)
 
 void omap_gem_deinit(struct drm_device *dev)
 {
-	// XXX cleanup usergart
-	omap_dmm_deinit(dev);
+	/* FIXME!!!!! do something here????? */
 }
