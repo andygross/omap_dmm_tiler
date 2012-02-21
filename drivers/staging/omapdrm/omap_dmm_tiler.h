@@ -72,10 +72,6 @@ struct tiler_block {
 #define TIL_ADDR(x, orient, a)\
 	((u32) (x) | (orient) | ((a) << SHIFT_ACC_MODE))
 
-/* externally accessible functions */
-int omap_dmm_init(struct drm_device *dev);
-int omap_dmm_remove(void);
-
 #ifdef CONFIG_DEBUG_FS
 int tiler_map_show(struct seq_file *s, void *arg);
 #endif
@@ -97,7 +93,7 @@ uint32_t tiler_stride(enum tiler_fmt fmt);
 size_t tiler_size(enum tiler_fmt fmt, uint16_t w, uint16_t h);
 size_t tiler_vsize(enum tiler_fmt fmt, uint16_t w, uint16_t h);
 void tiler_align(enum tiler_fmt fmt, uint16_t *w, uint16_t *h);
-
+int dmm_is_available(void);
 
 /* GEM bo flags -> tiler fmt */
 static inline enum tiler_fmt gem2fmt(uint32_t flags)

@@ -1100,7 +1100,6 @@ int omap_gem_new_handle(struct drm_device *dev, struct drm_file *file,
 struct drm_gem_object *omap_gem_new(struct drm_device *dev,
 		union omap_gem_size gsize, uint32_t flags)
 {
-	struct omap_drm_private *priv = dev->dev_private;
 	struct omap_gem_object *omap_obj;
 	struct drm_gem_object *obj = NULL;
 	size_t size;
@@ -1142,7 +1141,7 @@ struct drm_gem_object *omap_gem_new(struct drm_device *dev,
 
 	obj = &omap_obj->base;
 
-	if ((flags & OMAP_BO_SCANOUT) && !priv->has_dmm) {
+	if (flags & OMAP_BO_SCANOUT) {
 		/* attempt to allocate contiguous memory if we don't
 		 * have DMM for remappign discontiguous buffers
 		 */
@@ -1186,12 +1185,12 @@ void omap_gem_init(struct drm_device *dev)
 	const enum tiler_fmt fmts[] = {
 			TILFMT_8BIT, TILFMT_16BIT, TILFMT_32BIT
 	};
-	int i, j, ret;
+	int i, j;
 
-	ret = omap_dmm_init(dev);
-	if (ret) {
-		/* DMM only supported on OMAP4 and later, so this isn't fatal */
-		dev_warn(dev->dev, "omap_dmm_init failed, disabling DMM\n");
+	if (dmm_is_available())
+		priv->has_dmm = true;
+	else {
+		dev_info(dev->dev, "dmm not available, skipping usergart\n");
 		return;
 	}
 
@@ -1232,8 +1231,6 @@ void omap_gem_init(struct drm_device *dev)
 					usergart[i].stride_pfn << PAGE_SHIFT);
 		}
 	}
-
-	priv->has_dmm = true;
 }
 
 void omap_gem_deinit(struct drm_device *dev)
@@ -1241,6 +1238,5 @@ void omap_gem_deinit(struct drm_device *dev)
 	/* I believe we can rely on there being no more outstanding GEM
 	 * objects which could depend on usergart/dmm at this point.
 	 */
-	omap_dmm_remove();
 	kfree(usergart);
 }
