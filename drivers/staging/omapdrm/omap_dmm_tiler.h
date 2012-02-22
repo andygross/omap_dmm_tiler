@@ -16,6 +16,7 @@
 #ifndef OMAP_DMM_TILER_H
 #define OMAP_DMM_TILER_H
 
+#include <plat/cpu.h>
 #include "omap_drv.h"
 #include "tcm.h"
 
@@ -125,6 +126,11 @@ static inline bool validfmt(enum tiler_fmt fmt)
 	default:
 		return false;
 	}
+}
+
+static inline int dmm_is_available(void)
+{
+	return cpu_is_omap44xx();
 }
 
 struct omap_dmm_platform_data {
