@@ -21,6 +21,7 @@
 
 #include "drm_crtc_helper.h"
 #include "drm_fb_helper.h"
+#include "omap_dmm_tiler.h"
 
 #define DRIVER_NAME		MODULE_NAME
 #define DRIVER_DESC		"OMAP DRM"
@@ -792,6 +793,9 @@ static void pdev_shutdown(struct platform_device *device)
 static int pdev_probe(struct platform_device *device)
 {
 	DBG("%s", device->name);
+	if (platform_driver_register(&omap_dmm_driver))
+		dev_err(&device->dev, "DMM registration failed\n");
+
 	return drm_platform_init(&omap_drm_driver, device);
 }
 
@@ -799,6 +803,8 @@ static int pdev_remove(struct platform_device *device)
 {
 	DBG("");
 	drm_platform_exit(&omap_drm_driver, device);
+
+	platform_driver_unregister(&omap_dmm_driver);
 	return 0;
 }
 
