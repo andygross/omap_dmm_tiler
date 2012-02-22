@@ -35,7 +35,6 @@
 #if defined(CONFIG_DRM_OMAP) || (CONFIG_DRM_OMAP_MODULE)
 
 static struct omap_drm_platform_data omapdrm_platdata;
-static struct omap_dmm_platform_data dmm_platdata;
 
 static struct platform_device omap_drm_device = {
 		.dev = {
@@ -49,19 +48,20 @@ static struct platform_device omap_drm_device = {
 static int __init omap_init_gpu(void)
 {
 	struct omap_hwmod *oh = NULL;
+	struct platform_device *pdev;
 
 	/* lookup and populate the DMM information, if present - OMAP4+ */
 	oh = omap_hwmod_lookup("dmm");
 
 	if (oh) {
-		dmm_platdata.base = omap_hwmod_get_mpu_rt_va(oh);
-		dmm_platdata.irq = oh->mpu_irqs[0].irq;
-
-		if (dmm_platdata.base)
-			omapdrm_platdata.dmm_pdata = &dmm_platdata;
+		pdev = omap_device_build(oh->name, -1, oh, NULL, 0, NULL, 0,
+					false);
+		WARN(IS_ERR(pdev), "Could not build omap_device for %s\n",
+			oh->name);
 	}
 
 	return platform_device_register(&omap_drm_device);
+
 }
 
 arch_initcall(omap_init_gpu);

@@ -47,12 +47,6 @@ struct omap_kms_platform_data {
 
 struct omap_drm_platform_data {
 	struct omap_kms_platform_data *kms_pdata;
-	struct omap_dmm_platform_data *dmm_pdata;
-};
-
-struct omap_dmm_platform_data {
-	void __iomem *base;
-	int irq;
 };
 
 #if defined(CONFIG_DRM_OMAP) || defined(CONFIG_DRM_OMAP_MODULE)
