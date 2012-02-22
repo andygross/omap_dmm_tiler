@@ -49,7 +49,6 @@ struct omap_kms_platform_data {
 
 struct omap_drm_platform_data {
 	struct omap_kms_platform_data *kms_pdata;
-	struct omap_dmm_platform_data *dmm_pdata;
 };
 
 #endif /* __OMAP_DRM_H__ */
