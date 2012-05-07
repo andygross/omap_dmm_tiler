@@ -59,6 +59,20 @@ static bool twl6040_has_vibra(struct twl6040_platform_data *pdata,
 	return false;
 }
 
+static bool twl6040_has_gpo(struct twl6040_platform_data *pdata,
+			      struct device_node *node)
+{
+	if (pdata && pdata->gpo)
+		return true;
+
+#ifdef CONFIG_OF
+	if (of_find_node_by_name(node, "gpo"))
+		return true;
+#endif
+
+	return false;
+}
+
 int twl6040_reg_read(struct twl6040 *twl6040, unsigned int reg)
 {
 	int ret;
@@ -627,6 +641,17 @@ static int __devinit twl6040_probe(struct i2c_client *client,
 		if (pdata && pdata->vibra) {
 			cell->platform_data = pdata->vibra;
 			cell->pdata_size = sizeof(*pdata->vibra);
+		}
+		children++;
+	}
+
+	if (twl6040_has_gpo(pdata, node)) {
+		cell = &twl6040->cells[children];
+		cell->name = "twl6040-gpo";
+
+		if (pdata && pdata->gpo) {
+			cell->platform_data = pdata->gpo;
+			cell->pdata_size = sizeof(*pdata->gpo);
 		}
 		children++;
 	}
