@@ -543,9 +543,15 @@ static struct twl6040_vibra_data twl6040_vibra = {
 	.vddvibr_uV = 0,	/* fixed volt supply - VBAT */
 };
 
+static struct twl6040_gpo_data twl6040_gpo = {
+	.nr_gpo = TWL6040_GPO_MAX,
+	.gpio_base = -1,
+};
+
 static struct twl6040_platform_data twl6040_data = {
 	.codec		= &twl6040_codec,
 	.vibra		= &twl6040_vibra,
+	.gpo		= &twl6040_gpo,
 	.audpwron_gpio	= 127,
 	.irq_base	= TWL6040_CODEC_IRQ_BASE,
 };
