@@ -1311,6 +1311,8 @@ static int __init omapdss_hdmihw_probe(struct platform_device *pdev)
 	hdmi.ip_data.core_av_offset = HDMI_CORE_AV;
 	hdmi.ip_data.pll_offset = HDMI_PLLCTRL;
 	hdmi.ip_data.phy_offset = HDMI_PHY;
+	hdmi.ip_data.cfg.cm.code = 16;
+	hdmi.ip_data.cfg.cm.mode = HDMI_HDMI;
 
 	mutex_init(&hdmi.ip_data.lock);
 
