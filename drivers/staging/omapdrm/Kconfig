@@ -23,3 +23,8 @@ config DRM_OMAP_NUM_CRTCS
 	  Select the number of video overlays which can be used as framebuffers.
 	  The remaining overlays are reserved for video.
 
+config SITA
+	tristate "SITA Algorithm"
+	depends on DRM_OMAP
+	help
+	  Select SITA test algorithm

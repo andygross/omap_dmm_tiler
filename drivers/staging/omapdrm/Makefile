@@ -20,3 +20,5 @@ omapdrm-y := omap_drv.o \
 omapdrm-y += omap_gem_helpers.o
 
 obj-$(CONFIG_DRM_OMAP)	+= omapdrm.o
+
+obj-$(CONFIG_SITA)	+= sita.o
