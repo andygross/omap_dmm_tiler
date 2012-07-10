@@ -34,7 +34,8 @@ static struct {
 	/* This protects the panel ops, mainly when accessing the HDMI IP. */
 	struct mutex lock;
 	struct omap_dss_device *dssdev;
-#if defined(CONFIG_OMAP4_DSS_HDMI_AUDIO)
+#if defined(CONFIG_OMAP4_DSS_HDMI_AUDIO) || \
+	defined(CONFIG_OMAP5_DSS_HDMI_AUDIO)
 	/* This protects the audio ops, specifically. */
 	spinlock_t audio_lock;
 #endif
@@ -156,7 +157,8 @@ static void hdmi_panel_remove(struct omap_dss_device *dssdev)
 	device_remove_file(&dssdev->dev, &dev_attr_range);
 }
 
-#if defined(CONFIG_OMAP4_DSS_HDMI_AUDIO)
+#if defined(CONFIG_OMAP4_DSS_HDMI_AUDIO) || \
+	defined(CONFIG_OMAP5_DSS_HDMI_AUDIO)
 static int hdmi_panel_audio_enable(struct omap_dss_device *dssdev)
 {
 	unsigned long flags;
@@ -571,7 +573,8 @@ int hdmi_panel_init(void)
 {
 	mutex_init(&hdmi.lock);
 
-#if defined(CONFIG_OMAP4_DSS_HDMI_AUDIO)
+#if defined(CONFIG_OMAP4_DSS_HDMI_AUDIO) || \
+	defined (CONFIG_OMAP5_DSS_HDMI_AUDIO)
 	spin_lock_init(&hdmi.audio_lock);
 #endif
 
