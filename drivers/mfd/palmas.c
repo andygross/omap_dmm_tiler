@@ -518,6 +518,9 @@ static int __devinit palmas_i2c_probe(struct i2c_client *i2c,
 	children[PALMAS_USB_ID].platform_data = pdata->usb_pdata;
 	children[PALMAS_USB_ID].pdata_size = sizeof(*pdata->usb_pdata);
 
+	children[PALMAS_CLK_ID].platform_data = pdata->clk_pdata;
+	children[PALMAS_CLK_ID].pdata_size = sizeof(*pdata->clk_pdata);
+
 	ret = mfd_add_devices(palmas->dev, -1,
 			      children, ARRAY_SIZE(palmas_children),
 			      NULL, regmap_irq_chip_get_base(palmas->irq_data));
