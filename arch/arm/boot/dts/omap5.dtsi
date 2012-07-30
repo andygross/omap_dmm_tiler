@@ -180,5 +180,12 @@
 			ti,hwmods = "uart6";
 			clock-frequency = <48000000>;
 		};
+
+		i2c1: i2c@48070000 {
+			compatible = "ti,omap4-i2c";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			ti,hwmods = "i2c1";
+		};
 	};
 };
