@@ -231,7 +231,7 @@ static struct irq_domain_ops regmap_domain_ops = {
  * register cache.  The chip driver is responsible for restoring the
  * register values used by the IRQ controller over suspend and resume.
  */
-int regmap_add_irq_chip(struct regmap *map, int irq, int irq_flags,
+int regmap_add_irq_chip(struct device *dev, struct regmap *map, int irq, int irq_flags,
 			int irq_base, const struct regmap_irq_chip *chip,
 			struct regmap_irq_chip_data **data)
 {
@@ -314,11 +314,11 @@ int regmap_add_irq_chip(struct regmap *map, int irq, int irq_flags,
 	}
 
 	if (irq_base)
-		d->domain = irq_domain_add_legacy(map->dev->of_node,
+		d->domain = irq_domain_add_legacy(dev->of_node,
 						  chip->num_irqs, irq_base, 0,
 						  &regmap_domain_ops, d);
 	else
-		d->domain = irq_domain_add_linear(map->dev->of_node,
+		d->domain = irq_domain_add_linear(dev->of_node,
 						  chip->num_irqs,
 						  &regmap_domain_ops, d);
 	if (!d->domain) {
