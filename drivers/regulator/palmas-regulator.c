@@ -956,6 +956,7 @@ static __devinit int palmas_probe(struct platform_device *pdev)
 		else
 			config.init_data = NULL;
 
+		config.of_node = palmas_matches[id].of_node;
 		rdev = regulator_register(&pmic->desc[id], &config);
 		if (IS_ERR(rdev)) {
 			dev_err(&pdev->dev,
@@ -994,6 +995,7 @@ static __devinit int palmas_probe(struct platform_device *pdev)
 		else
 			config.init_data = NULL;
 
+		config.of_node = palmas_matches[id].of_node;
 		rdev = regulator_register(&pmic->desc[id], &config);
 		if (IS_ERR(rdev)) {
 			dev_err(&pdev->dev,
