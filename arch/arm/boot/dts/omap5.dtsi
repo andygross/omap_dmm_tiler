@@ -250,5 +250,14 @@
 			pinctrl-single,register-width = <16>;
 			pinctrl-single,function-mask = <0xffff>;
 		};
+
+		pad_wkup_mux: pinmux@4ae0c840 {
+			compatible = "pinctrl-single";
+			reg = <0x4ae0c840 0x3c>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			pinctrl-single,register-width = <16>;
+			pinctrl-single,function-mask = <0xffff>;
+		};
 	};
 };
