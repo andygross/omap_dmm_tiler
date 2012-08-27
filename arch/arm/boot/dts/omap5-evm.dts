@@ -31,4 +31,29 @@
 
 };
 
+&pad_core_mux {
+	pinctrl-names = "default";
+	pinctrl-0 = <&audio_core_pin>;
+
+	audio_core_pin: audio_core_pins {
+				/* TRM offset - 0x40, bits, mask */
+		pinctrl-single,bits = <0x142 0x0400 0x041f>, /* ABE_CLKS */
+				      <0x15c 0x0400 0x041f>, /* ABEMCPDM_UL_DATA */
+				      <0x15e 0x0000 0x041f>, /* ABEMCPDM_DL_DATA */
+				      <0x160 0x0400 0x041f>, /* ABEMCPDM_FRAME */
+				      <0x162 0x0000 0x041f>, /* ABEMCPDM_LB_CLK */
+				      <0x18a 0x000e 0x041f>; /* GPIO5 145 */
+	};
+};
+
+&pad_wkup_mux {
+	pinctrl-names = "default";
+	pinctrl-0 = <&audio_wkup_pin>;
+
+	audio_wkup_pin: audio_wkup_pins {
+				/* TRM offset - 0x40, bits, mask */
+		pinctrl-single,bits = <0x2a 0x0400 0x041f>; /* SYS_NIRQ2 */
+	};
+};
+
 /include/ "palmas.dtsi"
