@@ -14,6 +14,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
@@ -22,12 +23,15 @@
 #include <linux/slab.h>
 #include <linux/regmap.h>
 #include <linux/mfd/palmas.h>
+#include <linux/of_platform.h>
+#include <linux/regulator/of_regulator.h>
 
 struct regs_info {
 	char	*name;
 	u8	vsel_addr;
 	u8	ctrl_addr;
 	u8	tstep_addr;
+	u8	short_bit;
 };
 
 static const struct regs_info palmas_regs_info[] = {
@@ -36,6 +40,7 @@ static const struct regs_info palmas_regs_info[] = {
 		.vsel_addr	= PALMAS_SMPS12_VOLTAGE,
 		.ctrl_addr	= PALMAS_SMPS12_CTRL,
 		.tstep_addr	= PALMAS_SMPS12_TSTEP,
+		.short_bit	= PALMAS_SMPS_SHORT_STATUS_SMPS12,
 	},
 	{
 		.name		= "SMPS123",
@@ -47,12 +52,14 @@ static const struct regs_info palmas_regs_info[] = {
 		.name		= "SMPS3",
 		.vsel_addr	= PALMAS_SMPS3_VOLTAGE,
 		.ctrl_addr	= PALMAS_SMPS3_CTRL,
+		.short_bit	= PALMAS_SMPS_SHORT_STATUS_SMPS3,
 	},
 	{
 		.name		= "SMPS45",
 		.vsel_addr	= PALMAS_SMPS45_VOLTAGE,
 		.ctrl_addr	= PALMAS_SMPS45_CTRL,
 		.tstep_addr	= PALMAS_SMPS45_TSTEP,
+		.short_bit	= PALMAS_SMPS_SHORT_STATUS_SMPS45,
 	},
 	{
 		.name		= "SMPS457",
@@ -65,80 +72,96 @@ static const struct regs_info palmas_regs_info[] = {
 		.vsel_addr	= PALMAS_SMPS6_VOLTAGE,
 		.ctrl_addr	= PALMAS_SMPS6_CTRL,
 		.tstep_addr	= PALMAS_SMPS6_TSTEP,
+		.short_bit	= PALMAS_SMPS_SHORT_STATUS_SMPS6,
 	},
 	{
 		.name		= "SMPS7",
 		.vsel_addr	= PALMAS_SMPS7_VOLTAGE,
 		.ctrl_addr	= PALMAS_SMPS7_CTRL,
+		.short_bit	= PALMAS_SMPS_SHORT_STATUS_SMPS7,
 	},
 	{
 		.name		= "SMPS8",
 		.vsel_addr	= PALMAS_SMPS8_VOLTAGE,
 		.ctrl_addr	= PALMAS_SMPS8_CTRL,
 		.tstep_addr	= PALMAS_SMPS8_TSTEP,
+		.short_bit	= PALMAS_SMPS_SHORT_STATUS_SMPS8,
 	},
 	{
 		.name		= "SMPS9",
 		.vsel_addr	= PALMAS_SMPS9_VOLTAGE,
 		.ctrl_addr	= PALMAS_SMPS9_CTRL,
+		.short_bit	= PALMAS_SMPS_SHORT_STATUS_SMPS9,
 	},
 	{
 		.name		= "SMPS10",
+		.short_bit	= PALMAS_SMPS_SHORT_STATUS_SMPS10,
 	},
 	{
 		.name		= "LDO1",
 		.vsel_addr	= PALMAS_LDO1_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDO1_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS1_LDO1,
 	},
 	{
 		.name		= "LDO2",
 		.vsel_addr	= PALMAS_LDO2_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDO2_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS1_LDO2,
 	},
 	{
 		.name		= "LDO3",
 		.vsel_addr	= PALMAS_LDO3_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDO3_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS1_LDO3,
 	},
 	{
 		.name		= "LDO4",
 		.vsel_addr	= PALMAS_LDO4_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDO4_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS1_LDO4,
 	},
 	{
 		.name		= "LDO5",
 		.vsel_addr	= PALMAS_LDO5_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDO5_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS1_LDO5,
 	},
 	{
 		.name		= "LDO6",
 		.vsel_addr	= PALMAS_LDO6_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDO6_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS1_LDO6,
 	},
 	{
 		.name		= "LDO7",
 		.vsel_addr	= PALMAS_LDO7_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDO7_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS1_LDO7,
 	},
 	{
 		.name		= "LDO8",
 		.vsel_addr	= PALMAS_LDO8_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDO8_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS1_LDO8,
 	},
 	{
 		.name		= "LDO9",
 		.vsel_addr	= PALMAS_LDO9_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDO9_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS2_LDO9,
 	},
 	{
 		.name		= "LDOLN",
 		.vsel_addr	= PALMAS_LDOLN_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDOLN_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS2_LDOLN,
 	},
 	{
 		.name		= "LDOUSB",
 		.vsel_addr	= PALMAS_LDOUSB_VOLTAGE,
 		.ctrl_addr	= PALMAS_LDOUSB_CTRL,
+		.short_bit	= PALMAS_LDO_SHORT_STATUS2_LDOUSB,
 	},
 };
 
@@ -410,6 +433,60 @@ static struct regulator_ops palmas_ops_smps = {
 	.map_voltage		= palmas_map_voltage_smps,
 };
 
+/* @brief set or clear the bypass bit on SMPS10
+ *
+ * There is not a way to represent this function within the regulator
+ * framework. This sets/clears the bypass of SMPS10 so voltage is obtained
+ * from either SMPS10_IN or BOOST.
+ *
+ * @param palmas pointer to the palmas mfd structure
+ * @param bypass boolean to indicate switch status
+ * @return error or result
+ */
+int palmas_set_bypass_smps10(struct palmas *palmas, int bypass)
+{
+	unsigned int reg;
+
+	palmas_smps_read(palmas, PALMAS_SMPS10_CTRL, &reg);
+
+	if (bypass)
+		reg |= SMPS10_BYPASS_EN;
+	else
+		reg &= ~SMPS10_BYPASS_EN;
+
+	palmas_smps_write(palmas, PALMAS_SMPS10_CTRL, reg);
+
+	return 0;
+}
+EXPORT_SYMBOL(palmas_set_bypass_smps10);
+
+/* @brief set or clear the switch bit on SMPS10
+ *
+ * There is not a way to represent this function within the regulator
+ * framework. This sets/clears the switch of SMPS10 so SMPS10_OUT1 and
+ * SMPS10_OUT2 are shorted together.
+ *
+ * @param palmas pointer to the palmas mfd structure
+ * @param sw boolean to indicate switch status
+ * @return error or result
+ */
+int palmas_set_switch_smps10(struct palmas *palmas, int sw)
+{
+	unsigned int reg;
+
+	palmas_smps_read(palmas, PALMAS_SMPS10_CTRL, &reg);
+
+	if (sw)
+		reg |= SMPS10_SWITCH_EN;
+	else
+		reg &= ~SMPS10_SWITCH_EN;
+
+	palmas_smps_write(palmas, PALMAS_SMPS10_CTRL, reg);
+
+	return 0;
+}
+EXPORT_SYMBOL(palmas_set_switch_smps10);
+
 static struct regulator_ops palmas_ops_smps10 = {
 	.is_enabled		= regulator_is_enabled_regmap,
 	.enable			= regulator_enable_regmap,
@@ -511,6 +588,62 @@ static struct regulator_ops palmas_ops_ldo = {
 	.map_voltage		= palmas_map_voltage_ldo,
 };
 
+/* @brief set or clear the tracking bit on LDO8
+ *
+ * This sets or clears the tracking enabled on LDO8
+ *
+ * @param palmas pointer to the palmas mfd structure
+ * @param tracking a boolean to set/clear tracking
+ * @return error or result
+ */
+int palmas_set_ldo8_tracking(struct palmas *palmas, int tracking)
+{
+	int ret;
+	unsigned int reg;
+
+	ret = palmas_ldo_read(palmas, PALMAS_LDO8_CTRL, &reg);
+	if (ret)
+		return ret;
+
+	if (tracking)
+		reg |= PALMAS_LDO8_CTRL_LDO_TRACKING_EN;
+	else
+		reg &= ~PALMAS_LDO8_CTRL_LDO_TRACKING_EN;
+
+	ret = palmas_ldo_write(palmas, PALMAS_LDO8_CTRL, reg);
+
+	return ret;
+}
+EXPORT_SYMBOL(palmas_set_ldo8_tracking);
+
+/* @brief set or clear the bypass bit on LDO9
+ *
+ * This sets or clears the bypass enabled on LDO9
+ *
+ * @param palmas pointer to the palmas mfd structure
+ * @param bypass a boolean to set/clear bypass
+ * @return error or success
+ */
+int palmas_set_ldo9_bypass(struct palmas *palmas, int bypass)
+{
+	int ret;
+	unsigned int reg;
+
+	ret = palmas_ldo_read(palmas, PALMAS_LDO9_CTRL, &reg);
+	if (ret)
+		return ret;
+
+	if (bypass)
+		reg |= PALMAS_LDO9_CTRL_LDO_BYPASS_EN;
+	else
+		reg &= ~PALMAS_LDO9_CTRL_LDO_BYPASS_EN;
+
+	ret = palmas_ldo_write(palmas, PALMAS_LDO9_CTRL, reg);
+
+	return ret;
+}
+EXPORT_SYMBOL(palmas_set_ldo9_bypass);
+
 /*
  * setup the hardware based sleep configuration of the SMPS/LDO regulators
  * from the platform data. This is different to the software based control
@@ -606,10 +739,103 @@ static int palmas_ldo_init(struct palmas *palmas, int id,
 	return 0;
 }
 
+static struct of_regulator_match palmas_matches[] = {
+	{ .name = "smps12", },
+	{ .name = "smps123", },
+	{ .name = "smps3", },
+	{ .name = "smps45", },
+	{ .name = "smps457", },
+	{ .name = "smps6", },
+	{ .name = "smps7", },
+	{ .name = "smps8", },
+	{ .name = "smps9", },
+	{ .name = "smps10", },
+	{ .name = "ldo1", },
+	{ .name = "ldo2", },
+	{ .name = "ldo3", },
+	{ .name = "ldo4", },
+	{ .name = "ldo5", },
+	{ .name = "ldo6", },
+	{ .name = "ldo7", },
+	{ .name = "ldo8", },
+	{ .name = "ldo9", },
+	{ .name = "ldoln", },
+	{ .name = "ldousb", },
+};
+
+static void __devinit palmas_dt_to_pdata(struct device *dev,
+		struct device_node *node,
+		struct palmas_pmic_platform_data *pdata)
+{
+	struct device_node *regulators;
+	u32 prop;
+	int idx, ret;
+
+	regulators = of_find_node_by_name(node, "regulators");
+	if (!regulators) {
+		dev_info(dev, "regulator node not found\n");
+		return;
+	}
+
+	ret = of_regulator_match(dev, regulators, palmas_matches,
+			PALMAS_NUM_REGS);
+	if (ret < 0) {
+		dev_err(dev, "Error parsing regulator init data: %d\n", ret);
+		return;
+	}
+
+	for (idx = 0; idx < PALMAS_NUM_REGS; idx++) {
+		if (!palmas_matches[idx].init_data ||
+				!palmas_matches[idx].of_node)
+			continue;
+
+		pdata->reg_data[idx] = palmas_matches[idx].init_data;
+
+		pdata->reg_init[idx] = devm_kzalloc(dev,
+				sizeof(struct palmas_reg_init), GFP_KERNEL);
+
+		ret = of_property_read_u32(palmas_matches[idx].of_node,
+				"ti,warm_reset", &prop);
+		if (!ret)
+			pdata->reg_init[idx]->warm_reset = prop;
+
+		ret = of_property_read_u32(palmas_matches[idx].of_node,
+				"ti,roof_floor", &prop);
+		if (!ret)
+			pdata->reg_init[idx]->roof_floor = prop;
+
+		ret = of_property_read_u32(palmas_matches[idx].of_node,
+				"ti,mode_sleep", &prop);
+		if (!ret)
+			pdata->reg_init[idx]->mode_sleep = prop;
+
+		ret = of_property_read_u32(palmas_matches[idx].of_node,
+				"ti,warm_reset", &prop);
+		if (!ret)
+			pdata->reg_init[idx]->warm_reset = prop;
+
+		ret = of_property_read_u32(palmas_matches[idx].of_node,
+				"ti,tstep", &prop);
+		if (!ret)
+			pdata->reg_init[idx]->tstep = prop;
+
+		ret = of_property_read_u32(palmas_matches[idx].of_node,
+				"ti,vsel", &prop);
+		if (!ret)
+			pdata->reg_init[idx]->vsel = prop;
+	}
+
+	ret = of_property_read_u32(node, "ti,ldo6_vibrator", &prop);
+	if (!ret)
+		pdata->ldo6_vibrator = prop;
+}
+
+
 static __devinit int palmas_probe(struct platform_device *pdev)
 {
 	struct palmas *palmas = dev_get_drvdata(pdev->dev.parent);
 	struct palmas_pmic_platform_data *pdata = pdev->dev.platform_data;
+	struct device_node *node = pdev->dev.of_node;
 	struct regulator_dev *rdev;
 	struct regulator_config config = { };
 	struct palmas_pmic *pmic;
@@ -617,10 +843,14 @@ static __devinit int palmas_probe(struct platform_device *pdev)
 	int id = 0, ret;
 	unsigned int addr, reg;
 
-	if (!pdata)
-		return -EINVAL;
-	if (!pdata->reg_data)
-		return -EINVAL;
+	if(node && !pdata) {
+		pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
+
+		if (!pdata)
+			return -ENOMEM;
+
+		palmas_dt_to_pdata(&pdev->dev, node, pdata);
+	}
 
 	pmic = devm_kzalloc(&pdev->dev, sizeof(*pmic), GFP_KERNEL);
 	if (!pmic)
@@ -699,13 +929,11 @@ static __devinit int palmas_probe(struct platform_device *pdev)
 		pmic->desc[id].owner = THIS_MODULE;
 
 		/* Initialise sleep/init values from platform data */
-		if (pdata && pdata->reg_init) {
-			reg_init = pdata->reg_init[id];
-			if (reg_init) {
-				ret = palmas_smps_init(palmas, id, reg_init);
-				if (ret)
-					goto err_unregister_regulator;
-			}
+		reg_init = pdata->reg_init[id];
+		if (reg_init) {
+			ret = palmas_smps_init(palmas, id, reg_init);
+			if (ret)
+				goto err_unregister_regulator;
 		}
 
 		/*
@@ -723,7 +951,7 @@ static __devinit int palmas_probe(struct platform_device *pdev)
 				pmic->range[id] = 1;
 		}
 
-		if (pdata && pdata->reg_data)
+		if (pdata)
 			config.init_data = pdata->reg_data[id];
 		else
 			config.init_data = NULL;
@@ -761,7 +989,7 @@ static __devinit int palmas_probe(struct platform_device *pdev)
 						palmas_regs_info[id].ctrl_addr);
 		pmic->desc[id].enable_mask = PALMAS_LDO1_CTRL_MODE_ACTIVE;
 
-		if (pdata && pdata->reg_data)
+		if (pdata)
 			config.init_data = pdata->reg_data[id];
 		else
 			config.init_data = NULL;
@@ -779,15 +1007,11 @@ static __devinit int palmas_probe(struct platform_device *pdev)
 		pmic->rdev[id] = rdev;
 
 		/* Initialise sleep/init values from platform data */
-		if (pdata->reg_init) {
-			reg_init = pdata->reg_init[id];
-			if (reg_init) {
-				ret = palmas_ldo_init(palmas, id, reg_init);
-				if (ret) {
-					regulator_unregister(pmic->rdev[id]);
-					goto err_unregister_regulator;
-				}
-			}
+		reg_init = pdata->reg_init[id];
+		if (reg_init) {
+			ret = palmas_ldo_init(palmas, id, reg_init);
+			if (ret)
+				goto err_unregister_regulator;
 		}
 	}
 
@@ -809,9 +1033,15 @@ static int __devexit palmas_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static struct of_device_id __devinitdata of_palmas_match_tbl[] = {
+	{ .compatible = "ti,palmas-pmic", },
+	{ /* end */ }
+};
+
 static struct platform_driver palmas_driver = {
 	.driver = {
 		.name = "palmas-pmic",
+		.of_match_table = of_palmas_match_tbl,
 		.owner = THIS_MODULE,
 	},
 	.probe = palmas_probe,
@@ -834,3 +1064,4 @@ MODULE_AUTHOR("Graeme Gregory <gg@slimlogic.co.uk>");
 MODULE_DESCRIPTION("Palmas voltage regulator driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:palmas-pmic");
+MODULE_DEVICE_TABLE(of, of_palmas_match_tbl);
