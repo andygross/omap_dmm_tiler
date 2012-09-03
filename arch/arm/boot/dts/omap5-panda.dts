@@ -1,0 +1,94 @@
+/*
+ * Copyright (C) 2012 Texas Instruments Incorporated - http://www.ti.com/
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
+/dts-v1/;
+
+/include/ "omap5.dtsi"
+
+/ {
+	model = "TI OMAP5 EVM board";
+	compatible = "ti,omap5-panda", "ti,omap5";
+
+	memory {
+		device_type = "memory";
+		reg = <0x80000000 0x80000000>; /* 2 GB */
+	};
+
+	sound {
+		compatible = "ti,abe-twl6040";
+		ti,model = "PandaBoard5";
+
+		ti,jack-detection = <1>;
+		ti,mclk-freq = <19200000>;
+
+		ti,mcpdm = <&mcpdm>;
+
+		ti,twl6040 = <&twl6040>;
+
+		/* Audio routing */
+		ti,audio-routing =
+			"Headset Stereophone", "HSOL",
+			"Headset Stereophone", "HSOR",
+			"Line Out", "AUXL",
+			"Line Out", "AUXR",
+			"HSMIC", "Headset Mic",
+			"Headset Mic", "Headset Mic Bias",
+			"AFML", "Line In",
+			"AFMR", "Line In";
+	};
+};
+
+&i2c1 {
+	clock-frequency = <400000>;
+
+	palmas: palmas@48 {
+		reg = <0x48>;
+		/* SPI = 0, IRQ# = 7, 4 = active high level-sensitive */
+		interrupts = <0 7 4>; /* IRQ_SYS_1N cascaded to gic */
+		interrupt-parent = <&gic>;
+	};
+
+	twl6040: twl@4b {
+		compatible = "ti,twl6040";
+
+		interrupts = <0 119 4>; /* IRQ_SYS_2N cascaded to gic */
+		interrupt-parent = <&gic>;
+		ti,audpwron-gpio = <&gpio5 13 0>;  /* gpio line 141 */
+
+		vio-supply = <&smps7_reg>;
+		v2v1-supply = <&smps9_reg>;
+		enable-active-high;
+	};
+};
+
+&pad_core_mux {
+	pinctrl-names = "default";
+	pinctrl-0 = <&audio_core_pin>;
+
+	audio_core_pin: audio_core_pins {
+				/* TRM offset - 0x40, bits, mask */
+		pinctrl-single,bits = <0x142 0x0400 0x041f>, /* ABE_CLKS */
+				      <0x15c 0x0400 0x041f>, /* ABEMCPDM_UL_DATA */
+				      <0x15e 0x0000 0x041f>, /* ABEMCPDM_DL_DATA */
+				      <0x160 0x0400 0x041f>, /* ABEMCPDM_FRAME */
+				      <0x162 0x0000 0x041f>, /* ABEMCPDM_LB_CLK */
+				      <0x17e 0x000e 0x041f>; /* GPIO5 141 */
+	};
+};
+
+&pad_wkup_mux {
+	pinctrl-names = "default";
+	pinctrl-0 = <&audio_wkup_pin>;
+
+	audio_wkup_pin: audio_wkup_pins {
+				/* TRM offset - 0x40, bits, mask */
+		pinctrl-single,bits = <0x2a 0x0400 0x041f>; /* SYS_NIRQ2 */
+	};
+};
+
+/include/ "palmas.dtsi"
+/include/ "twl6040.dtsi"

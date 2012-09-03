@@ -402,6 +402,13 @@ config GPIO_TWL4030
 	  Say yes here to access the GPIO signals of various multi-function
 	  power management chips from Texas Instruments.
 
+config GPIO_TWL6040
+	tristate "TWL6040 GPO"
+	depends on TWL6040_CORE
+	help
+	  Say yes here to access the GPO signals of twl6040
+	  audio chip from Texas Instruments.
+
 config GPIO_WM831X
 	tristate "WM831x GPIOs"
 	depends on MFD_WM831X
@@ -617,5 +624,12 @@ config GPIO_MSIC
 	help
 	  Enable support for GPIO on intel MSIC controllers found in
 	  intel MID devices
+
+config GPIO_PALMAS
+	bool "PALMAS GPIO"
+	depends on MFD_PALMAS
+	help
+	  Select this option to enable GPIO driver for the Palmas
+	  chip familly.
 
 endif
