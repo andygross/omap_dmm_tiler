@@ -1,4 +1,4 @@
-# common clock types
+
 obj-$(CONFIG_CLKDEV_LOOKUP)	+= clkdev.o
 obj-$(CONFIG_COMMON_CLK)	+= clk.o clk-fixed-rate.o clk-gate.o \
 				   clk-mux.o clk-divider.o clk-fixed-factor.o
@@ -13,3 +13,4 @@ obj-$(CONFIG_ARCH_INTEGRATOR)	+= versatile/
 
 # Chip specific
 obj-$(CONFIG_COMMON_CLK_WM831X) += clk-wm831x.o
+obj-$(CONFIG_CLK_PALMAS) += clk-palmas.o
