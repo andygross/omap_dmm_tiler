@@ -188,6 +188,13 @@
 			ti,hwmods = "i2c1";
 		};
 
+		i2c5: i2c@4807c000 {
+			compatible = "ti,omap4-i2c";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			ti,hwmods = "i2c5";
+		};
+
 		mcpdm: mcpdm@40132000 {
 			compatible = "ti,omap4-mcpdm";
 			reg = <0x40132000 0x7f>, /* MPU private access */
