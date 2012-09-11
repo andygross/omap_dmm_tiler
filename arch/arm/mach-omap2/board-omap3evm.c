@@ -58,6 +58,7 @@
 #include "hsmmc.h"
 #include "common-board-devices.h"
 
+#define OMAP3_EVM_TS_GPIO	175
 #define OMAP3_EVM_EHCI_VBUS	22
 #define OMAP3_EVM_EHCI_SELECT	61
 
@@ -736,6 +737,7 @@ static void __init omap3_evm_init(void)
 	omap3evm_init_smsc911x();
 	omap3_evm_display_init();
 	omap3_evm_wl12xx_init();
+	omap_twl4030_audio_init("omap3evm");
 }
 
 MACHINE_START(OMAP3EVM, "OMAP3 EVM")

@@ -609,6 +609,10 @@ int snd_soc_suspend(struct device *dev)
 					  SND_SOC_DAPM_STREAM_SUSPEND);
 	}
 
+	/* Recheck all analogue paths too */
+	dapm_mark_io_dirty(&card->dapm);
+	snd_soc_dapm_sync(&card->dapm);
+
 	/* suspend all CODECs */
 	list_for_each_entry(codec, &card->codec_dev_list, card_list) {
 		/* If there are paths active then the CODEC will be held with
@@ -756,6 +760,10 @@ static void soc_resume_deferred(struct work_struct *work)
 
 	/* userspace can access us now we are back as we were before */
 	snd_power_change_state(card->snd_card, SNDRV_CTL_POWER_D0);
+
+	/* Recheck all analogue paths too */
+	dapm_mark_io_dirty(&card->dapm);
+	snd_soc_dapm_sync(&card->dapm);
 }
 
 /* powers up audio subsystem after a suspend */
@@ -826,7 +834,7 @@ static int soc_bind_dai_link(struct snd_soc_card *card, int num)
 	}
 
 	if (!rtd->cpu_dai) {
-		dev_dbg(card->dev, "CPU DAI %s not registered\n",
+		dev_err(card->dev, "CPU DAI %s not registered\n",
 			dai_link->cpu_dai_name);
 		return -EPROBE_DEFER;
 	}
@@ -857,14 +865,14 @@ static int soc_bind_dai_link(struct snd_soc_card *card, int num)
 		}
 
 		if (!rtd->codec_dai) {
-			dev_dbg(card->dev, "CODEC DAI %s not registered\n",
+			dev_err(card->dev, "CODEC DAI %s not registered\n",
 				dai_link->codec_dai_name);
 			return -EPROBE_DEFER;
 		}
 	}
 
 	if (!rtd->codec) {
-		dev_dbg(card->dev, "CODEC %s not registered\n",
+		dev_err(card->dev, "CODEC %s not registered\n",
 			dai_link->codec_name);
 		return -EPROBE_DEFER;
 	}
@@ -888,7 +896,7 @@ static int soc_bind_dai_link(struct snd_soc_card *card, int num)
 		rtd->platform = platform;
 	}
 	if (!rtd->platform) {
-		dev_dbg(card->dev, "platform %s not registered\n",
+		dev_err(card->dev, "platform %s not registered\n",
 			dai_link->platform_name);
 		return -EPROBE_DEFER;
 	}
@@ -1388,37 +1396,48 @@ static int soc_probe_link_dais(struct snd_soc_card *card, int num, int order)
 	if (ret < 0)
 		pr_warn("asoc: failed to add pmdown_time sysfs:%d\n", ret);
 
-	if (!dai_link->params) {
-		/* create the pcm */
-		ret = soc_new_pcm(rtd, num);
+	if (cpu_dai->driver->compress_dai) {
+		/*create compress_device"*/
+		ret = soc_new_compress(rtd, num);
 		if (ret < 0) {
-			pr_err("asoc: can't create pcm %s :%d\n",
-			       dai_link->stream_name, ret);
+			pr_err("asoc: can't create compress %s\n",
+					 dai_link->stream_name);
 			return ret;
 		}
 	} else {
-		/* link the DAI widgets */
-		play_w = codec_dai->playback_widget;
-		capture_w = cpu_dai->capture_widget;
-		if (play_w && capture_w) {
-			ret = snd_soc_dapm_new_pcm(card, dai_link->params,
-						   capture_w, play_w);
-			if (ret != 0) {
-				dev_err(card->dev, "Can't link %s to %s: %d\n",
-					play_w->name, capture_w->name, ret);
+
+		if (!dai_link->params) {
+			/* create the pcm */
+			ret = soc_new_pcm(rtd, num);
+			if (ret < 0) {
+				pr_err("asoc: can't create pcm %s :%d\n",
+				       dai_link->stream_name, ret);
 				return ret;
 			}
-		}
-
-		play_w = cpu_dai->playback_widget;
-		capture_w = codec_dai->capture_widget;
-		if (play_w && capture_w) {
-			ret = snd_soc_dapm_new_pcm(card, dai_link->params,
+		} else {
+			/* link the DAI widgets */
+			play_w = codec_dai->playback_widget;
+			capture_w = cpu_dai->capture_widget;
+			if (play_w && capture_w) {
+				ret = snd_soc_dapm_new_pcm(card, dai_link->params,
 						   capture_w, play_w);
-			if (ret != 0) {
-				dev_err(card->dev, "Can't link %s to %s: %d\n",
-					play_w->name, capture_w->name, ret);
-				return ret;
+				if (ret != 0) {
+					dev_err(card->dev, "Can't link %s to %s: %d\n",
+						play_w->name, capture_w->name, ret);
+					return ret;
+				}
+			}
+
+			play_w = cpu_dai->playback_widget;
+			capture_w = codec_dai->capture_widget;
+			if (play_w && capture_w) {
+				ret = snd_soc_dapm_new_pcm(card, dai_link->params,
+						   capture_w, play_w);
+				if (ret != 0) {
+					dev_err(card->dev, "Can't link %s to %s: %d\n",
+						play_w->name, capture_w->name, ret);
+					return ret;
+				}
 			}
 		}
 	}
@@ -1480,6 +1499,8 @@ static int soc_check_aux_dev(struct snd_soc_card *card, int num)
 		if (!strcmp(codec->name, aux_dev->codec_name))
 			return 0;
 	}
+
+	dev_err(card->dev, "%s not registered\n", aux_dev->codec_name);
 
 	return -EPROBE_DEFER;
 }
@@ -1814,7 +1835,6 @@ base_error:
 static int soc_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
-	int ret = 0;
 
 	/*
 	 * no card, so machine driver should be registering card
@@ -1830,13 +1850,7 @@ static int soc_probe(struct platform_device *pdev)
 	/* Bodge while we unpick instantiation */
 	card->dev = &pdev->dev;
 
-	ret = snd_soc_register_card(card);
-	if (ret != 0) {
-		dev_err(&pdev->dev, "Failed to register card\n");
-		return ret;
-	}
-
-	return 0;
+	return snd_soc_register_card(card);
 }
 
 static int soc_cleanup_card_resources(struct snd_soc_card *card)
@@ -3715,6 +3729,9 @@ int snd_soc_register_dai(struct device *dev,
 		}
 	}
 
+	if (!dai->codec)
+		dai->dapm.idle_bias_off = 1;
+
 	list_add(&dai->list, &dai_list);
 
 	mutex_unlock(&client_mutex);
@@ -3802,6 +3819,9 @@ int snd_soc_register_dais(struct device *dev,
 				break;
 			}
 		}
+
+		if (!dai->codec)
+			dai->dapm.idle_bias_off = 1;
 
 		list_add(&dai->list, &dai_list);
 
