@@ -128,5 +128,12 @@
 	};
 };
 
+&i2c5 {
+	tca: tca@22 {
+		reg = <0x22>;
+	};
+};
+
 /include/ "palmas.dtsi"
 /include/ "twl6040.dtsi"
+/include/ "tca6424a.dtsi"
