@@ -82,7 +82,8 @@
 
 &pad_core_mux {
 	pinctrl-names = "default";
-	pinctrl-0 = <&audio_core_pin>;
+	pinctrl-0 = <&audio_core_pin>,
+		    <&dss_hdmi_pin>;
 
 	audio_core_pin: audio_core_pins {
 				/* TRM offset - 0x40, bits, mask */
@@ -92,6 +93,10 @@
 				      <0x160 0x0400 0x041f>, /* ABEMCPDM_FRAME */
 				      <0x162 0x0000 0x041f>, /* ABEMCPDM_LB_CLK */
 				      <0x18a 0x000e 0x041f>; /* GPIO5 145 */
+	};
+
+	dss_hdmi_pin: dss_hdmi_pins {
+		pinctrl-single,bits = <0xfe 0x000e 0x041f>; /* GPIO 193 */
 	};
 };
 
