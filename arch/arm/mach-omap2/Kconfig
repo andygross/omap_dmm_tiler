@@ -63,6 +63,7 @@ config ARCH_OMAP4
 	select USB_ARCH_HAS_EHCI if USB_SUPPORT
 	select ARM_CPU_SUSPEND if PM
 	select ARCH_NEEDS_CPU_IDLE_COUPLED if SMP
+	select PINCTRL
 
 config SOC_OMAP5
 	bool "TI OMAP5"
@@ -70,6 +71,7 @@ config SOC_OMAP5
 	select ARM_GIC
 	select HAVE_SMP
 	select ARM_CPU_SUSPEND if PM
+	select PINCTRL
 
 comment "OMAP Core Type"
 	depends on ARCH_OMAP2

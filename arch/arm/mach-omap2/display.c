@@ -23,6 +23,8 @@
 #include <linux/clk.h>
 #include <linux/err.h>
 #include <linux/delay.h>
+#include <linux/of.h>
+#include <linux/of_platform.h>
 
 #include <video/omapdss.h>
 #include <plat/omap_hwmod.h>
@@ -95,9 +97,17 @@ static const struct omap_dss_hwmod_data omap4_dss_hwmod_data[] __initdata = {
 	{ "dss_core", "omapdss_dss", -1 },
 	{ "dss_dispc", "omapdss_dispc", -1 },
 	{ "dss_rfbi", "omapdss_rfbi", -1 },
-	{ "dss_venc", "omapdss_venc", -1 },
 	{ "dss_dsi1", "omapdss_dsi", 0 },
 	{ "dss_dsi2", "omapdss_dsi", 1 },
+	{ "dss_hdmi", "omapdss_hdmi", -1 },
+};
+
+static const struct omap_dss_hwmod_data omap5_dss_hwmod_data[] __initdata = {
+	{ "dss_core", "omapdss_dss", -1 },
+	{ "dss_dispc", "omapdss_dispc", -1 },
+	{ "dss_rfbi", "omapdss_rfbi", -1 },
+	{ "dss_dsi1_a", "omapdss_dsi", 0 },
+	{ "dss_dsi1_c", "omapdss_dsi", 1 },
 	{ "dss_hdmi", "omapdss_hdmi", -1 },
 };
 
@@ -160,6 +170,36 @@ static int omap4_dsi_mux_pads(int dsi_id, unsigned lanes)
 	return 0;
 }
 
+#define CONTROL_PAD_BASE	0x4A002800
+#define CONTROL_DSIPHY		0x614
+
+static int omap5_dsi_mux_pads(int dsi_id, unsigned lanes)
+{
+	u32 enable_mask, enable_shift, reg;
+	void __iomem *ctrl_pad_base = NULL;
+
+	ctrl_pad_base = ioremap(CONTROL_PAD_BASE, SZ_4K);
+	if (!ctrl_pad_base)
+		return -ENXIO;
+
+	if (dsi_id == 0) {
+		enable_mask = OMAP4_DSI1_LANEENABLE_MASK;
+		enable_shift = OMAP4_DSI1_LANEENABLE_SHIFT;
+	} else if (dsi_id == 1) {
+		enable_mask = OMAP4_DSI2_LANEENABLE_MASK;
+		enable_shift = OMAP4_DSI2_LANEENABLE_SHIFT;
+	} else {
+		return -ENODEV;
+	}
+
+	reg = __raw_readl(ctrl_pad_base + CONTROL_DSIPHY);
+	reg &= ~enable_mask;
+	reg |= (lanes << enable_shift) & enable_mask;
+	__raw_writel(reg, ctrl_pad_base + CONTROL_DSIPHY);
+
+	return 0;
+}
+
 int __init omap_hdmi_init(enum omap_hdmi_flags flags)
 {
 	if (cpu_is_omap44xx())
@@ -172,6 +212,8 @@ static int omap_dsi_enable_pads(int dsi_id, unsigned lane_mask)
 {
 	if (cpu_is_omap44xx())
 		return omap4_dsi_mux_pads(dsi_id, lane_mask);
+	else if (soc_is_omap54xx())
+		return omap5_dsi_mux_pads(dsi_id, lane_mask);
 
 	return 0;
 }
@@ -180,6 +222,8 @@ static void omap_dsi_disable_pads(int dsi_id, unsigned lane_mask)
 {
 	if (cpu_is_omap44xx())
 		omap4_dsi_mux_pads(dsi_id, 0);
+	else if (soc_is_omap54xx())
+		omap5_dsi_mux_pads(dsi_id, 0);
 }
 
 static int omap_dss_set_min_bus_tput(struct device *dev, unsigned long tput)
@@ -316,9 +360,14 @@ int __init omap_display_init(struct omap_dss_board_info *board_data)
 	} else if (cpu_is_omap34xx()) {
 		curr_dss_hwmod = omap3_dss_hwmod_data;
 		oh_count = ARRAY_SIZE(omap3_dss_hwmod_data);
-	} else {
+	} else if (cpu_is_omap44xx()) {
 		curr_dss_hwmod = omap4_dss_hwmod_data;
 		oh_count = ARRAY_SIZE(omap4_dss_hwmod_data);
+	} else if (soc_is_omap54xx()) {
+		curr_dss_hwmod = omap5_dss_hwmod_data;
+		oh_count = ARRAY_SIZE(omap5_dss_hwmod_data);
+	} else {
+		return 0;
 	}
 
 	/*
@@ -520,4 +569,81 @@ int omap_dss_reset(struct omap_hwmod *oh)
 	r = (c == MAX_MODULE_SOFTRESET_WAIT) ? -ETIMEDOUT : 0;
 
 	return r;
+}
+
+/* HDMI pinmuxing HACK function */
+static __init void hdmi_hack_init_of(void)
+{
+	int ls_oe_gpio, ct_cp_hpd_gpio, hpd_gpio;
+	enum omap_hdmi_flags flags;
+
+	if (of_machine_is_compatible("ti,omap4-sdp")) {
+		ls_oe_gpio = 41;
+		ct_cp_hpd_gpio = 60;
+		hpd_gpio = 63;
+
+		if (cpu_is_omap446x() || omap_rev() > OMAP4430_REV_ES2_2)
+			flags = OMAP_HDMI_SDA_SCL_EXTERNAL_PULLUP;
+		else
+			flags = 0;
+	} else if (of_machine_is_compatible("ti,omap4-panda")) {
+		ls_oe_gpio = 41;
+		ct_cp_hpd_gpio = 60;
+		hpd_gpio = 63;
+
+		if (cpu_is_omap446x() || omap_rev() > OMAP4430_REV_ES2_2)
+			flags = OMAP_HDMI_SDA_SCL_EXTERNAL_PULLUP;
+		else
+			flags = 0;
+	} else {
+		return;
+	}
+
+	omap_hdmi_init(flags);
+
+	omap_mux_init_gpio(ls_oe_gpio, OMAP_PIN_OUTPUT);
+	omap_mux_init_gpio(ct_cp_hpd_gpio, OMAP_PIN_OUTPUT);
+	omap_mux_init_gpio(hpd_gpio, OMAP_PIN_INPUT_PULLDOWN);
+}
+
+int __init omapdss_init_of(void)
+{
+	int r;
+	struct platform_device *pdev;
+	struct device_node *node;
+
+	static struct omap_dss_board_info board_data = {
+		.dsi_enable_pads = omap_dsi_enable_pads,
+		.dsi_disable_pads = omap_dsi_disable_pads,
+		.get_context_loss_count = omap_pm_get_dev_context_loss_count,
+	};
+
+	/* find the main dss node  */
+	node = of_find_node_by_name(NULL, "dss");
+	if (!node)
+		return 0;
+
+	pdev = of_find_device_by_node(node);
+	if (!pdev) {
+		pr_err("Cannot find dss platform device\n");
+		return -EINVAL;
+	}
+
+	r = of_platform_populate(node, NULL, NULL, &pdev->dev);
+	if (r) {
+		pr_err("Failed to populate dss devices\n");
+		return -EINVAL;
+	}
+
+	omap_display_device.dev.platform_data = &board_data;
+
+	r = platform_device_register(&omap_display_device);
+	if (r < 0) {
+		pr_err("Unable to register omapdss device\n");
+		return r;
+	}
+
+	hdmi_hack_init_of();
+
+	return 0;
 }

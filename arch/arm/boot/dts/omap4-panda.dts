@@ -79,7 +79,6 @@
 
 	twl6040: twl@4b {
 		compatible = "ti,twl6040";
-		reg = <0x4b>;
 		/* SPI = 0, IRQ# = 119, 4 = active high level-sensitive */
 		interrupts = <0 119 4>; /* IRQ_SYS_2N cascaded to gic */
 		interrupt-parent = <&gic>;
@@ -92,6 +91,7 @@
 };
 
 /include/ "twl6030.dtsi"
+/include/ "twl6040.dtsi"
 
 &i2c2 {
 	clock-frequency = <400000>;
@@ -134,4 +134,28 @@
 &mmc5 {
 	ti,non-removable;
 	bus-width = <4>;
+};
+
+&dpi {
+	dvi {
+		compatible = "ti,tfp410";
+		data-lines = <24>;
+		gpios = <&gpio1 0 0>;	/* 0, power-down */
+		i2c-bus = <&i2c3>;
+	};
+};
+
+&hdmi {
+	tpd12s015 {
+		compatible = "ti,tpd12s015";
+
+		gpios = <&gpio2 28 0>,	/* 60, CT CP HPD */
+			<&gpio2 9 0>,	/* 41, LS OE */
+			<&gpio2 31 0>;	/* 63, HPD */
+
+		hdmi {
+			compatible = "ti,hdmi_panel";
+		};
+
+	};
 };

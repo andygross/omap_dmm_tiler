@@ -29,17 +29,23 @@
 #include <linux/errno.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/slab.h>
+#include <linux/of.h>
 
 #include <video/omapdss.h>
-#include <plat/cpu.h>
 
 #include "dss.h"
+#include "dss_features.h"
 
 static struct {
 	struct regulator *vdds_dsi_reg;
 	struct platform_device *dsidev;
 
+	struct mutex lock;
+
+	struct omap_video_timings timings;
 	struct dss_lcd_mgr_config mgr_config;
+	int data_lines;
 } dpi;
 
 static struct platform_device *dpi_get_dsidev(enum omap_dss_clk_source clk)
@@ -121,7 +127,7 @@ static int dpi_set_dispc_clk(struct omap_dss_device *dssdev,
 
 static int dpi_set_mode(struct omap_dss_device *dssdev)
 {
-	struct omap_video_timings *t = &dssdev->panel.timings;
+	struct omap_video_timings *t = &dpi.timings;
 	int lck_div = 0, pck_div = 0;
 	unsigned long fck = 0;
 	unsigned long pck;
@@ -158,7 +164,7 @@ static void dpi_config_lcd_manager(struct omap_dss_device *dssdev)
 	dpi.mgr_config.stallmode = false;
 	dpi.mgr_config.fifohandcheck = false;
 
-	dpi.mgr_config.video_port_width = dssdev->phy.dpi.data_lines;
+	dpi.mgr_config.video_port_width = dpi.data_lines;
 
 	dpi.mgr_config.lcden_sig_polarity = 0;
 
@@ -169,14 +175,18 @@ int omapdss_dpi_display_enable(struct omap_dss_device *dssdev)
 {
 	int r;
 
-	if (cpu_is_omap34xx() && !dpi.vdds_dsi_reg) {
+	mutex_lock(&dpi.lock);
+
+	if (dss_has_feature(FEAT_DPI_USES_VDDS_DSI) && !dpi.vdds_dsi_reg) {
 		DSSERR("no VDSS_DSI regulator\n");
-		return -ENODEV;
+		r = -ENODEV;
+		goto err_no_reg;
 	}
 
 	if (dssdev->manager == NULL) {
 		DSSERR("failed to enable display: no manager\n");
-		return -ENODEV;
+		r = -ENODEV;
+		goto err_no_mgr;
 	}
 
 	r = omap_dss_start_device(dssdev);
@@ -185,7 +195,7 @@ int omapdss_dpi_display_enable(struct omap_dss_device *dssdev)
 		goto err_start_dev;
 	}
 
-	if (cpu_is_omap34xx()) {
+	if (dss_has_feature(FEAT_DPI_USES_VDDS_DSI)) {
 		r = regulator_enable(dpi.vdds_dsi_reg);
 		if (r)
 			goto err_reg_enable;
@@ -217,6 +227,8 @@ int omapdss_dpi_display_enable(struct omap_dss_device *dssdev)
 	if (r)
 		goto err_mgr_enable;
 
+	mutex_unlock(&dpi.lock);
+
 	return 0;
 
 err_mgr_enable:
@@ -229,17 +241,22 @@ err_dsi_pll_init:
 err_get_dsi:
 	dispc_runtime_put();
 err_get_dispc:
-	if (cpu_is_omap34xx())
+	if (dss_has_feature(FEAT_DPI_USES_VDDS_DSI))
 		regulator_disable(dpi.vdds_dsi_reg);
 err_reg_enable:
 	omap_dss_stop_device(dssdev);
 err_start_dev:
+err_no_mgr:
+err_no_reg:
+	mutex_unlock(&dpi.lock);
 	return r;
 }
 EXPORT_SYMBOL(omapdss_dpi_display_enable);
 
 void omapdss_dpi_display_disable(struct omap_dss_device *dssdev)
 {
+	mutex_lock(&dpi.lock);
+
 	dss_mgr_disable(dssdev->manager);
 
 	if (dpi_use_dsi_pll(dssdev)) {
@@ -250,33 +267,27 @@ void omapdss_dpi_display_disable(struct omap_dss_device *dssdev)
 
 	dispc_runtime_put();
 
-	if (cpu_is_omap34xx())
+	if (dss_has_feature(FEAT_DPI_USES_VDDS_DSI))
 		regulator_disable(dpi.vdds_dsi_reg);
 
 	omap_dss_stop_device(dssdev);
+
+	mutex_unlock(&dpi.lock);
 }
 EXPORT_SYMBOL(omapdss_dpi_display_disable);
 
-void dpi_set_timings(struct omap_dss_device *dssdev,
-			struct omap_video_timings *timings)
+void omapdss_dpi_set_timings(struct omap_dss_device *dssdev,
+		struct omap_video_timings *timings)
 {
-	int r;
-
 	DSSDBG("dpi_set_timings\n");
-	dssdev->panel.timings = *timings;
-	if (dssdev->state == OMAP_DSS_DISPLAY_ACTIVE) {
-		r = dispc_runtime_get();
-		if (r)
-			return;
 
-		dpi_set_mode(dssdev);
+	mutex_lock(&dpi.lock);
 
-		dispc_runtime_put();
-	} else {
-		dss_mgr_set_timings(dssdev->manager, timings);
-	}
+	dpi.timings = *timings;
+
+	mutex_unlock(&dpi.lock);
 }
-EXPORT_SYMBOL(dpi_set_timings);
+EXPORT_SYMBOL(omapdss_dpi_set_timings);
 
 int dpi_check_timings(struct omap_dss_device *dssdev,
 			struct omap_video_timings *timings)
@@ -325,11 +336,22 @@ int dpi_check_timings(struct omap_dss_device *dssdev,
 }
 EXPORT_SYMBOL(dpi_check_timings);
 
+void omapdss_dpi_set_data_lines(struct omap_dss_device *dssdev, int data_lines)
+{
+	mutex_lock(&dpi.lock);
+
+	dpi.data_lines = data_lines;
+
+	mutex_unlock(&dpi.lock);
+}
+EXPORT_SYMBOL(omapdss_dpi_set_data_lines);
+
 static int __init dpi_init_display(struct omap_dss_device *dssdev)
 {
 	DSSDBG("init_display\n");
 
-	if (cpu_is_omap34xx() && dpi.vdds_dsi_reg == NULL) {
+	if (dss_has_feature(FEAT_DPI_USES_VDDS_DSI) &&
+					dpi.vdds_dsi_reg == NULL) {
 		struct regulator *vdds_dsi;
 
 		vdds_dsi = dss_get_vdds_dsi();
@@ -351,10 +373,14 @@ static int __init dpi_init_display(struct omap_dss_device *dssdev)
 	return 0;
 }
 
-static void __init dpi_probe_pdata(struct platform_device *pdev)
+static struct omap_dss_device * __init dpi_find_dssdev(struct platform_device *pdev)
 {
 	struct omap_dss_board_info *pdata = pdev->dev.platform_data;
-	int i, r;
+	const char *def_disp_name = dss_get_default_display_name();
+	struct omap_dss_device *def_dssdev;
+	int i;
+
+	def_dssdev = NULL;
 
 	for (i = 0; i < pdata->num_devices; ++i) {
 		struct omap_dss_device *dssdev = pdata->devices[i];
@@ -362,38 +388,133 @@ static void __init dpi_probe_pdata(struct platform_device *pdev)
 		if (dssdev->type != OMAP_DISPLAY_TYPE_DPI)
 			continue;
 
-		r = dpi_init_display(dssdev);
-		if (r) {
-			DSSERR("device %s init failed: %d\n", dssdev->name, r);
-			continue;
-		}
+		if (def_dssdev == NULL)
+			def_dssdev = dssdev;
 
-		r = omap_dss_register_device(dssdev, &pdev->dev, i);
-		if (r)
-			DSSERR("device %s register failed: %d\n",
-					dssdev->name, r);
+		if (def_disp_name != NULL &&
+				strcmp(dssdev->name, def_disp_name) == 0) {
+			def_dssdev = dssdev;
+			break;
+		}
+	}
+
+	return def_dssdev;
+}
+
+static void __init dpi_probe_pdata(struct platform_device *dpidev)
+{
+	struct omap_dss_device *plat_dssdev;
+	struct omap_dss_device *dssdev;
+	int r;
+
+	plat_dssdev = dpi_find_dssdev(dpidev);
+
+	if (!plat_dssdev)
+		return;
+
+	dssdev = dss_alloc_and_init_device(&dpidev->dev);
+	if (!dssdev)
+		return;
+
+	dss_copy_device_pdata(dssdev, plat_dssdev);
+
+	r = dpi_init_display(dssdev);
+	if (r) {
+		DSSERR("device %s init failed: %d\n", dssdev->name, r);
+		dss_put_device(dssdev);
+		return;
+	}
+
+	r = dss_add_device(dssdev);
+	if (r) {
+		DSSERR("device %s register failed: %d\n", dssdev->name, r);
+		dss_put_device(dssdev);
+		return;
+	}
+}
+
+static void __init dpi_probe_of(struct platform_device *pdev)
+{
+	struct device_node *node = pdev->dev.of_node;
+	struct device_node *child;
+	struct omap_dss_device *dssdev;
+	enum omap_channel channel;
+	u32 v;
+	int r;
+
+	child = of_get_next_available_child(node, NULL);
+
+	if (!child)
+		return;
+
+	r = of_property_read_u32(node, "video-source", &v);
+	if (r) {
+		DSSERR("parsing channel failed\n");
+		return;
+	}
+
+	channel = v;
+
+	dssdev = dss_alloc_and_init_device(&pdev->dev);
+	if (!dssdev)
+		return;
+
+	dssdev->dev.of_node = child;
+	dssdev->type = OMAP_DISPLAY_TYPE_DPI;
+	dssdev->name = child->name;
+	dssdev->channel = channel;
+
+	r = dpi_init_display(dssdev);
+	if (r) {
+		DSSERR("device %s init failed: %d\n", dssdev->name, r);
+		dss_put_device(dssdev);
+		return;
+	}
+
+	r = dss_add_device(dssdev);
+	if (r) {
+		DSSERR("dss_add_device failed %d\n", r);
+		dss_put_device(dssdev);
+		return;
 	}
 }
 
 static int __init omap_dpi_probe(struct platform_device *pdev)
 {
-	dpi_probe_pdata(pdev);
+	mutex_init(&dpi.lock);
+
+	if (pdev->dev.of_node)
+		dpi_probe_of(pdev);
+	else if (pdev->dev.platform_data)
+		dpi_probe_pdata(pdev);
 
 	return 0;
 }
 
 static int __exit omap_dpi_remove(struct platform_device *pdev)
 {
-	omap_dss_unregister_child_devices(&pdev->dev);
+	dss_unregister_child_devices(&pdev->dev);
 
 	return 0;
 }
+
+#if defined(CONFIG_OF)
+static const struct of_device_id dpi_of_match[] = {
+	{
+		.compatible = "ti,omap4-dpi",
+	},
+	{},
+};
+#else
+#define dpi_of_match NULL
+#endif
 
 static struct platform_driver omap_dpi_driver = {
 	.remove         = __exit_p(omap_dpi_remove),
 	.driver         = {
 		.name   = "omapdss_dpi",
 		.owner  = THIS_MODULE,
+		.of_match_table = dpi_of_match,
 	},
 };
 

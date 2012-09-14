@@ -5,16 +5,14 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-/dts-v1/;
 
-/include/ "omap2420.dtsi"
+/*
+ * 8 channel high-quality low power audio codec
+ * http://www.ti.com/lit/ds/symlink/twl6040.pdf
+ */
+&twl6040 {
+	reg = <0x4b>;
 
-/ {
-	model = "TI OMAP2420 H4 board";
-	compatible = "ti,omap2420-h4", "ti,omap2420", "ti,omap2";
-
-	memory {
-		device_type = "memory";
-		reg = <0x80000000 0x84000000>; /* 64 MB */
-	};
+	gpio-controller;
+	#gpio-cells = <1>;
 };

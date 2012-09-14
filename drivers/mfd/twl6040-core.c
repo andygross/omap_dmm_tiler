@@ -645,11 +645,15 @@ static int __devinit twl6040_probe(struct i2c_client *client,
 		children++;
 	}
 
-	if (twl6040_has_gpo(pdata, node)) {
+	/*
+	 * Enable the GPO driver in the following cases:
+	 * DT booted kernel or legacy boot with valid gpo platform_data
+	 */
+	if (!pdata || (pdata && pdata->gpo)) {
 		cell = &twl6040->cells[children];
 		cell->name = "twl6040-gpo";
 
-		if (pdata && pdata->gpo) {
+		if (pdata) {
 			cell->platform_data = pdata->gpo;
 			cell->pdata_size = sizeof(*pdata->gpo);
 		}

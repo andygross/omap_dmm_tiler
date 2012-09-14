@@ -558,15 +558,9 @@ static const struct i2c_device_id palmas_i2c_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, palmas_i2c_id);
 
-static struct of_device_id __devinitdata of_palmas_match_tbl[] = {
-	{ .compatible = "ti,palmas", },
-	{ /* end */ }
-};
-
 static struct i2c_driver palmas_i2c_driver = {
 	.driver = {
 		   .name = "palmas",
-		   .of_match_table = of_palmas_match_tbl,
 		   .owner = THIS_MODULE,
 	},
 	.probe = palmas_i2c_probe,

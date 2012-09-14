@@ -180,5 +180,124 @@
 			ti,hwmods = "uart6";
 			clock-frequency = <48000000>;
 		};
+
+		i2c1: i2c@48070000 {
+			compatible = "ti,omap4-i2c";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			ti,hwmods = "i2c1";
+		};
+
+		mcpdm: mcpdm@40132000 {
+			compatible = "ti,omap4-mcpdm";
+			reg = <0x40132000 0x7f>, /* MPU private access */
+			      <0x49032000 0x7f>; /* L3 Interconnect */
+			interrupts = <0 112 0x4>;
+			interrupt-parent = <&gic>;
+			ti,hwmods = "mcpdm";
+		};
+
+		dmic: dmic@4012e000 {
+			compatible = "ti,omap4-dmic";
+			reg = <0x4012e000 0x7f>, /* MPU private access */
+			      <0x4902e000 0x7f>; /* L3 Interconnect */
+			interrupts = <0 114 0x4>;
+			interrupt-parent = <&gic>;
+			ti,hwmods = "dmic";
+		};
+
+		mcbsp1: mcbsp@40122000 {
+			compatible = "ti,omap4-mcbsp";
+			reg = <0x40122000 0xff>, /* MPU private access */
+			      <0x49022000 0xff>; /* L3 Interconnect */
+			reg-names = "mpu", "dma";
+			interrupts = <0 17 0x4>;
+			interrupt-names = "common";
+			interrupt-parent = <&gic>;
+			ti,buffer-size = <128>;
+			ti,hwmods = "mcbsp1";
+		};
+
+		mcbsp2: mcbsp@40124000 {
+			compatible = "ti,omap4-mcbsp";
+			reg = <0x40124000 0xff>, /* MPU private access */
+			      <0x49024000 0xff>; /* L3 Interconnect */
+			reg-names = "mpu", "dma";
+			interrupts = <0 22 0x4>;
+			interrupt-names = "common";
+			interrupt-parent = <&gic>;
+			ti,buffer-size = <128>;
+			ti,hwmods = "mcbsp2";
+		};
+
+		mcbsp3: mcbsp@40126000 {
+			compatible = "ti,omap4-mcbsp";
+			reg = <0x40126000 0xff>, /* MPU private access */
+			      <0x49026000 0xff>; /* L3 Interconnect */
+			reg-names = "mpu", "dma";
+			interrupts = <0 23 0x4>;
+			interrupt-names = "common";
+			interrupt-parent = <&gic>;
+			ti,buffer-size = <128>;
+			ti,hwmods = "mcbsp3";
+		};
+
+		pad_core_mux: pinmux@4a002840 {
+			compatible = "pinctrl-single";
+			reg = <0x4a002840 0x1b8>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			pinctrl-single,register-width = <16>;
+			pinctrl-single,function-mask = <0xffff>;
+		};
+
+		pad_wkup_mux: pinmux@4ae0c840 {
+			compatible = "pinctrl-single";
+			reg = <0x4ae0c840 0x3c>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			pinctrl-single,register-width = <16>;
+			pinctrl-single,function-mask = <0xffff>;
+		};
+
+		dss {
+			compatible = "ti,omap4-dss";
+			ti,hwmods = "dss_core";
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			dispc {
+				compatible = "ti,omap4-dispc";
+				ti,hwmods = "dss_dispc";
+			};
+
+			dpi: dpi {
+				compatible = "ti,omap4-dpi";
+				video-source = <2>;
+			};
+
+			dsi1: dsi@1 {
+				compatible = "ti,omap4-dsi";
+				ti,hwmods = "dss_dsi1_a";
+				reg = <0>;
+				vdds_dsi-supply = <&ldo7_reg>;
+				video-source = <0>;
+			};
+
+			dsi2: dsi@2 {
+				compatible = "ti,omap4-dsi";
+				ti,hwmods = "dss_dsi1_c";
+				reg = <1>;
+				vdds_dsi-supply = <&ldo7_reg>;
+				video-source = <2>;
+			};
+
+			hdmi: hdmi {
+				compatible = "ti,omap4-hdmi";
+				ti,hwmods = "dss_hdmi";
+				vdda_hdmi_dac-supply = <&ldo7_reg>;
+				video-source = <1>;
+			};
+		};
 	};
 };

@@ -11,7 +11,7 @@
 
 / {
 	model = "TI OMAP5 EVM board";
-	compatible = "ti,omap5-evm", "ti,omap5";
+	compatible = "ti,omap5-panda", "ti,omap5";
 
 	memory {
 		device_type = "memory";
@@ -20,13 +20,12 @@
 
 	sound {
 		compatible = "ti,abe-twl6040";
-		ti,model = "OMAP5-sEVM";
+		ti,model = "PandaBoard5";
 
 		ti,jack-detection = <1>;
 		ti,mclk-freq = <19200000>;
 
 		ti,mcpdm = <&mcpdm>;
-		ti,dmic = <&dmic>;
 
 		ti,twl6040 = <&twl6040>;
 
@@ -34,21 +33,12 @@
 		ti,audio-routing =
 			"Headset Stereophone", "HSOL",
 			"Headset Stereophone", "HSOR",
-			"Earphone Spk", "EP",
-			"Ext Spk", "HFL",
-			"Ext Spk", "HFR",
 			"Line Out", "AUXL",
 			"Line Out", "AUXR",
 			"HSMIC", "Headset Mic",
 			"Headset Mic", "Headset Mic Bias",
-			"MAINMIC", "Main Handset Mic",
-			"Main Handset Mic", "Main Mic Bias",
-			"SUBMIC", "Sub Handset Mic",
-			"Sub Handset Mic", "Main Mic Bias",
 			"AFML", "Line In",
-			"AFMR", "Line In",
-			"DMic", "Digital Mic",
-			"Digital Mic", "Digital Mic1 Bias";
+			"AFMR", "Line In";
 	};
 };
 
@@ -67,7 +57,7 @@
 
 		interrupts = <0 119 4>; /* IRQ_SYS_2N cascaded to gic */
 		interrupt-parent = <&gic>;
-		ti,audpwron-gpio = <&gpio5 17 0>;  /* gpio line 145 */
+		ti,audpwron-gpio = <&gpio5 13 0>;  /* gpio line 141 */
 
 		vio-supply = <&smps7_reg>;
 		v2v1-supply = <&smps9_reg>;
@@ -86,7 +76,7 @@
 				      <0x15e 0x0000 0x041f>, /* ABEMCPDM_DL_DATA */
 				      <0x160 0x0400 0x041f>, /* ABEMCPDM_FRAME */
 				      <0x162 0x0000 0x041f>, /* ABEMCPDM_LB_CLK */
-				      <0x18a 0x000e 0x041f>; /* GPIO5 145 */
+				      <0x17e 0x000e 0x041f>; /* GPIO5 141 */
 	};
 };
 
@@ -97,29 +87,6 @@
 	audio_wkup_pin: audio_wkup_pins {
 				/* TRM offset - 0x40, bits, mask */
 		pinctrl-single,bits = <0x2a 0x0400 0x041f>; /* SYS_NIRQ2 */
-	};
-};
-
-&dsi1 {
-	lcd {
-		compatible = "ti,lg4591";
-
-		lanes = <
-			0       /* clk + */
-			1       /* clk - */
-			2       /* data1 + */
-			3       /* data1 - */
-			4       /* data2 + */
-			5       /* data2 - */
-			6       /* data3 + */
-			7       /* data3 - */
-			8       /* data4 + */
-			9       /* data4 - */
-		>;
-
-		vdds_foo-supply = <&ldo2_reg>;
-
-		gpios = <&gpio6 23 0>;	/* 183, reset */
 	};
 };
 

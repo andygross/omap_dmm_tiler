@@ -3,8 +3,9 @@
  *
  * Copyright (C) 2012 Texas Instruments, Inc.
  *
- * Initial Code:
+ * Authors:
  *	Sergio Aguirre <saaguirre@ti.com>
+ *	Peter Ujfalusi <peter.ujfalusi@ti.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,14 +34,6 @@
 
 static struct gpio_chip twl6040gpo_chip;
 
-/*----------------------------------------------------------------------*/
-
-static int twl6040gpo_direction_in(struct gpio_chip *chip, unsigned offset)
-{
-	/* This only drives GPOs, and can't change direction */
-	return -EINVAL;
-}
-
 static int twl6040gpo_get(struct gpio_chip *chip, unsigned offset)
 {
 	struct twl6040 *twl6040 = dev_get_drvdata(chip->dev->parent);
@@ -53,7 +46,8 @@ static int twl6040gpo_get(struct gpio_chip *chip, unsigned offset)
 	return (ret >> offset) & 1;
 }
 
-static int twl6040gpo_direction_out(struct gpio_chip *chip, unsigned offset, int value)
+static int twl6040gpo_direction_out(struct gpio_chip *chip, unsigned offset,
+				    int value)
 {
 	/* This only drives GPOs, and can't change direction */
 	return 0;
@@ -69,8 +63,10 @@ static void twl6040gpo_set(struct gpio_chip *chip, unsigned offset, int value)
 	if (ret < 0)
 		return;
 
-	gpoctl = ret & ~(1 << offset);
-	gpoctl |= (((value > 0) ? 1 : 0) << offset);
+	if (value)
+		gpoctl = ret | (1 << offset);
+	else
+		gpoctl = ret & ~(1 << offset);
 
 	twl6040_reg_write(twl6040, TWL6040_REG_GPOCTL, gpoctl);
 }
@@ -78,7 +74,6 @@ static void twl6040gpo_set(struct gpio_chip *chip, unsigned offset, int value)
 static struct gpio_chip twl6040gpo_chip = {
 	.label			= "twl6040",
 	.owner			= THIS_MODULE,
-	.direction_input	= twl6040gpo_direction_in,
 	.get			= twl6040gpo_get,
 	.direction_output	= twl6040gpo_direction_out,
 	.set			= twl6040gpo_set,
@@ -91,34 +86,24 @@ static int __devinit gpo_twl6040_probe(struct platform_device *pdev)
 {
 	struct twl6040_gpo_data *pdata = pdev->dev.platform_data;
 	struct device *twl6040_core_dev = pdev->dev.parent;
-	struct device_node *twl6040_core_node = NULL;
+	struct twl6040 *twl6040 = dev_get_drvdata(twl6040_core_dev);
 	int ret;
 
-#ifdef CONFIG_OF
-	twl6040_core_node = of_find_node_by_name(twl6040_core_dev->of_node,
-						 "gpo");
-#endif
-
-	if (!pdata && !twl6040_core_node) {
-		dev_err(&pdev->dev, "Platform data missing!\n");
-		return -EINVAL;
-	}
-
-	if (pdata) {
+	if (pdata)
 		twl6040gpo_chip.base = pdata->gpio_base;
-		twl6040gpo_chip.ngpio = pdata->nr_gpo;
-	} else {
-		u32 nr_gpio;
-
+	else
 		twl6040gpo_chip.base = -1;
-		of_property_read_u32(twl6040_core_node, "ti,nr_gpo",
-				     &nr_gpio);
-		twl6040gpo_chip.ngpio = nr_gpio;
-	}
+
+	if (twl6040_get_revid(twl6040) < TWL6041_REV_ES2_0)
+		twl6040gpo_chip.ngpio = 3; /* twl6040 have 3 GPO */
+	else
+		twl6040gpo_chip.ngpio = 1; /* twl6041 have 1 GPO */
 
 	twl6040gpo_chip.dev = &pdev->dev;
-	dev_err(&pdev->dev, "base: %d, nr_gpo: %d\n", twl6040gpo_chip.base,
-		twl6040gpo_chip.ngpio);
+#ifdef CONFIG_OF_GPIO
+	twl6040gpo_chip.of_node = twl6040_core_dev->of_node;
+#endif
+
 	ret = gpiochip_add(&twl6040gpo_chip);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "could not register gpiochip, %d\n", ret);
