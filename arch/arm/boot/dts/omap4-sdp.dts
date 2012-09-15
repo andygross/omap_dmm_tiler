@@ -103,6 +103,9 @@
 
 		ti,aess = <&aess>;
 
+		ti,mcbsp1 = <&mcbsp1>;
+		ti,mcbsp2 = <&mcbsp2>;
+
 		/* Audio routing */
 		ti,audio-routing =
 			"Headset Stereophone", "HSOL",
