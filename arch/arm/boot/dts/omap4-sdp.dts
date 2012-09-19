@@ -144,6 +144,14 @@
 			"omap-dmic-abe.2 Capture", "Digital Mic1 Bias",
 			"Digital Mic1 Bias", "Digital Mic 2";
 	};
+
+	sound_hdmi {
+		compatible = "ti,omap-hdmi-audio";
+		ti,model = "OMAP4HDMI";
+
+		ti,hdmi_audio = <&hdmi_audio>;
+		ti,level_shifter = <&tpd12s015>;
+	};
 };
 
 &i2c1 {
@@ -299,7 +307,7 @@
 };
 
 &hdmi {
-	tpd12s015 {
+	tpd12s015: tpd12s015{
 		compatible = "ti,tpd12s015";
 
 		gpios = <&gpio2 28 0>,	/* 60, CT CP HPD */
