@@ -55,6 +55,14 @@
 			"DMic", "Digital Mic",
 			"Digital Mic", "Digital Mic1 Bias";
 	};
+
+	sound_hdmi {
+		compatible = "ti,omap-hdmi-audio";
+		ti,model = "OMAP5HDMI";
+
+		ti,hdmi_audio = <&hdmi_audio>;
+		ti,level_shifter = <&tpd12s015>;
+	};
 };
 
 &i2c1 {
@@ -140,7 +148,7 @@
 };
 
 &hdmi {
-	tpd12s015 {
+	tpd12s015: tpd12s015 {
 		compatible = "ti,tpd12s015";
 
 		gpios = <&tca 0 0>,	/* TCA6424A P01, CT_CP_HDP */
