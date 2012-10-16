@@ -94,7 +94,7 @@ uint32_t tiler_stride(enum tiler_fmt fmt);
 size_t tiler_size(enum tiler_fmt fmt, uint16_t w, uint16_t h);
 size_t tiler_vsize(enum tiler_fmt fmt, uint16_t w, uint16_t h);
 void tiler_align(enum tiler_fmt fmt, uint16_t *w, uint16_t *h);
-bool dmm_is_initialized(void);
+bool dmm_is_available(void);
 
 extern struct platform_driver omap_dmm_driver;
 
@@ -124,11 +124,6 @@ static inline bool validfmt(enum tiler_fmt fmt)
 	default:
 		return false;
 	}
-}
-
-static inline int dmm_is_available(void)
-{
-	return cpu_is_omap44xx();
 }
 
 #endif
