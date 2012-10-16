@@ -69,6 +69,10 @@ void omap_gem_describe(struct drm_gem_object *obj, struct seq_file *m);
 void omap_gem_describe_objects(struct list_head *list, struct seq_file *m);
 #endif
 
+#ifdef CONFIG_PM
+int omap_gem_resume(struct device *dev);
+#endif
+
 struct drm_fb_helper *omap_fbdev_init(struct drm_device *dev);
 void omap_fbdev_free(struct drm_device *dev);
 
