@@ -650,5 +650,12 @@
 				ctrl-module = <&omap_control_usb>;
 			};
 		};
+
+		dmm: dmm@4e000000 {
+			compatible = "ti,dmm";
+			reg = <0x4e000000 0x800>;
+			interrupts = <0 113 0x4>;
+			ti,hwmods = "dmm";
+		};
 	};
 };
